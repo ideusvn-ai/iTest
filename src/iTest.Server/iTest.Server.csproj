@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>false</UseWindowsForms>
+    <RootNamespace>ITest.Server</RootNamespace>
+    <AssemblyName>iTest-Server</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Product>iTest-Server</Product>
+    <Description>iTest-Server – bảng điều khiển phòng thi</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.104.*" />
+    <PackageReference Include="QuestPDF" Version="2024.12.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\iTest.Core\iTest.Core.csproj" />
+    <ProjectReference Include="..\iTest.UI\iTest.UI.csproj" />
+  </ItemGroup>
+
+</Project>

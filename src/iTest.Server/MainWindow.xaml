@@ -1,0 +1,267 @@
+<Window x:Class="ITest.Server.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="iTest-Server" Width="1440" Height="900" WindowState="Maximized" WindowStartupLocation="CenterScreen"
+        Style="{StaticResource AppWindow}">
+    <Grid>
+        <!-- ============ Thiết lập phòng thi ============ -->
+        <ScrollViewer x:Name="SetupPanel" VerticalScrollBarVisibility="Auto">
+            <Border Style="{StaticResource CardBorder}" Width="620" Margin="24" VerticalAlignment="Center" HorizontalAlignment="Center" Padding="28">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <Border Width="38" Height="38" CornerRadius="9" Background="{StaticResource Primary}">
+                            <TextBlock Text="iT" Foreground="White" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <StackPanel Margin="12,0,0,0">
+                            <TextBlock Text="Mở phòng thi" Style="{StaticResource H1}"/>
+                            <TextBlock x:Name="HostLine" Style="{StaticResource Hint}"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="Sở Giáo dục và Đào tạo" Style="{StaticResource FieldLabel}" Margin="0,18,0,4"/>
+                    <TextBox x:Name="DeptBox"/>
+                    <TextBlock Text="Trường" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="SchoolBox"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="12"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                        <StackPanel><TextBlock Text="Phòng thi" Style="{StaticResource FieldLabel}"/><TextBox x:Name="RoomBox"/></StackPanel>
+                        <StackPanel Grid.Column="2"><TextBlock Text="Giám thị" Style="{StaticResource FieldLabel}"/><TextBox x:Name="ProctorBox"/></StackPanel>
+                    </Grid>
+                    <TextBlock Text="Tên Sở và Trường được in lên đầu đề thi của thí sinh." Style="{StaticResource Hint}" Margin="0,6,0,0"/>
+                    <TextBlock Text="Bộ đề" Style="{StaticResource FieldLabel}" Margin="0,16,0,4"/>
+                    <Button x:Name="PickBtn" Content="⬆  Chọn file bộ đề (.itz) đóng gói từ iTest-Editor" MinHeight="64" Background="#F8FAFC" BorderBrush="#94A3B8" Click="Pick_Click"/>
+                    <Border x:Name="FileBox" Visibility="Collapsed" Margin="0,12,0,0" Background="#F8FAFC" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="12" Padding="14">
+                        <StackPanel>
+                            <TextBlock x:Name="FileName" FontWeight="Bold"/>
+                            <TextBlock x:Name="FileLock" Style="{StaticResource Hint}" Margin="0,2,0,8"/>
+                            <StackPanel x:Name="PassRow">
+                                <TextBlock Text="Mật khẩu mở bộ đề" Style="{StaticResource FieldLabel}"/>
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right" Content="Mở khoá" Margin="8,0,0,0" Click="Unlock_Click"/>
+                                    <PasswordBox x:Name="PassBox"/>
+                                </DockPanel>
+                            </StackPanel>
+                            <ItemsControl x:Name="PkgFileInfo" Margin="0,8,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <DockPanel Margin="0,2">
+                                            <TextBlock Text="{Binding V}" FontWeight="SemiBold" DockPanel.Dock="Right"/>
+                                            <TextBlock Text="{Binding K}" Foreground="{StaticResource Muted}"/>
+                                        </DockPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+                    <TextBlock x:Name="SetupError" Foreground="{StaticResource Bad}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                    <Button Content="Mở phòng thi" Style="{StaticResource BtnPrimary}" MinHeight="50" Margin="0,14,0,0" Click="OpenRoom_Click"/>
+                </StackPanel>
+            </Border>
+        </ScrollViewer>
+
+        <!-- ============ Giám sát ============ -->
+        <Grid x:Name="MainPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <Border Background="White" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="20,10">
+                <DockPanel>
+                    <WrapPanel DockPanel.Dock="Right" VerticalAlignment="Center">
+                        <Border Background="#F8FAFC" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="12" Padding="14,4" Margin="0,0,12,0">
+                            <StackPanel>
+                                <TextBlock x:Name="TimerText" FontFamily="{StaticResource MonoFont}" FontSize="24" FontWeight="Bold"/>
+                                <TextBlock x:Name="TimerSub" Style="{StaticResource Hint}"/>
+                            </StackPanel>
+                        </Border>
+                        <Button x:Name="StartBtn" Content="Phát đề &amp; bắt đầu" Style="{StaticResource BtnOk}" Margin="0,0,8,0" Click="Start_Click"/>
+                        <Button x:Name="PauseBtn" Content="Tạm dừng" Margin="0,0,8,0" Click="Pause_Click"/>
+                        <Button x:Name="AddAllBtn" Content="+5 phút cả phòng" Margin="0,0,8,0" Click="AddAll_Click"/>
+                        <Button x:Name="NoticeAllBtn" Content="Nhắc nhở chung" Style="{StaticResource BtnWarn}" Margin="0,0,8,0" Click="NoticeAll_Click"/>
+                        <Button x:Name="CollectBtn" Content="Thu bài tất cả" Style="{StaticResource BtnPrimary}" Margin="0,0,8,0" Click="Collect_Click"/>
+                        <Button x:Name="CloseBtn" Content="Đóng phòng" Style="{StaticResource BtnDanger}" Click="CloseRoom_Click"/>
+                    </WrapPanel>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock x:Name="PhaseText" FontSize="11" FontWeight="Bold" Foreground="#166534"/>
+                        <TextBlock x:Name="ExamTitle" FontSize="17" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock x:Name="RoomLine" Style="{StaticResource Hint}"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <Grid Grid.Row="1" Margin="20,14">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="400"/></Grid.ColumnDefinitions>
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="14"/><RowDefinition Height="300"/></Grid.RowDefinitions>
+                    <Border Style="{StaticResource CardBorder}" Padding="14">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                                    <TextBlock Text="Lọc" VerticalAlignment="Center" Foreground="{StaticResource Muted}" Margin="0,0,6,0"/>
+                                    <ComboBox x:Name="FilterBox" Width="190" Margin="0,0,10,0" SelectionChanged="Filter_Changed"/>
+                                    <TextBox x:Name="SearchBox" Width="170" Margin="0,0,10,0" ToolTip="Tìm tên, SBD, máy" TextChanged="Search_Changed"/>
+                                    <RadioButton x:Name="ViewList" Content="Danh sách" IsChecked="True" GroupName="v" VerticalAlignment="Center" Margin="0,0,10,0" Checked="View_Changed"/>
+                                    <RadioButton x:Name="ViewGrid" Content="Lưới" GroupName="v" VerticalAlignment="Center" Checked="View_Changed"/>
+                                </StackPanel>
+                                <TextBlock x:Name="ListTitle" Style="{StaticResource H2}" VerticalAlignment="Center" Margin="0"/>
+                            </DockPanel>
+                            <Grid>
+                                <DataGrid x:Name="Table" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column" GridLinesVisibility="None"
+                                          SelectionMode="Single" RowHeight="34" BorderThickness="0" Background="White" SelectionChanged="Table_SelectionChanged"
+                                          CanUserAddRows="False">
+                                    <DataGrid.RowStyle>
+                                        <Style TargetType="DataGridRow"><Setter Property="Background" Value="{Binding RowBrush}"/></Style>
+                                    </DataGrid.RowStyle>
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="MÁY" Width="110">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <Ellipse Width="9" Height="9" Fill="{Binding StatusBrush}" Margin="0,0,6,0"/>
+                                                        <TextBlock Text="{Binding Machine}" FontWeight="Bold"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="SBD" Binding="{Binding Sbd}" Width="80"/>
+                                        <DataGridTextColumn Header="HỌ VÀ TÊN" Binding="{Binding FullName}" Width="*"/>
+                                        <DataGridTextColumn Header="NGÀY SINH" Binding="{Binding BirthDate}" Width="90"/>
+                                        <DataGridTextColumn Header="LỚP" Binding="{Binding ClassName}" Width="60"/>
+                                        <DataGridTextColumn Header="MÃ ĐỀ" Binding="{Binding Code}" Width="60"/>
+                                        <DataGridTextColumn Header="ĐỊA CHỈ IP" Binding="{Binding Ip}" Width="110"/>
+                                        <DataGridTextColumn Header="CÒN LẠI" Binding="{Binding Left}" Width="70"/>
+                                        <DataGridTemplateColumn Header="TRẠNG THÁI" Width="200">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="KỶ LUẬT" Binding="{Binding Discipline}" Width="100"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <ListBox x:Name="Tiles" Visibility="Collapsed" BorderThickness="0" SelectionChanged="Tiles_SelectionChanged"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Width="180" Margin="4" Padding="12" CornerRadius="12" Background="{Binding RowBrush}" BorderBrush="{StaticResource Line}" BorderThickness="1">
+                                                <StackPanel>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <Ellipse Width="9" Height="9" Fill="{Binding StatusBrush}" Margin="0,0,6,0"/>
+                                                        <TextBlock Text="{Binding Machine}" FontWeight="Bold"/>
+                                                        <TextBlock Text="{Binding Code}" Foreground="{StaticResource Muted}" Margin="6,0,0,0"/>
+                                                    </StackPanel>
+                                                    <TextBlock Text="{Binding FullName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Margin="0,4,0,0"/>
+                                                    <TextBlock Text="{Binding Sbd}" Style="{StaticResource Hint}"/>
+                                                    <TextBlock Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
+                        </DockPanel>
+                    </Border>
+
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="1.45*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Border Style="{StaticResource CardBorder}" Padding="14">
+                            <DockPanel>
+                                <TextBlock x:Name="FeedTitle" DockPanel.Dock="Top" Style="{StaticResource H2}"/>
+                                <ListBox x:Name="FeedList" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <DockPanel>
+                                                <TextBlock Text="{Binding At}" FontFamily="{StaticResource MonoFont}" Foreground="{StaticResource Muted}" Width="64" FontSize="12"/>
+                                                <Border Background="{Binding TagBg}" CornerRadius="6" Padding="6,2" Width="96" Margin="0,0,8,0">
+                                                    <TextBlock Text="{Binding Tag}" Foreground="{Binding TagFg}" FontSize="10" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                                </Border>
+                                                <TextBlock Text="{Binding Pc}" FontWeight="Bold" Margin="0,0,6,0" FontSize="12"/>
+                                                <TextBlock Text="{Binding Text}" TextWrapping="Wrap" FontSize="12"/>
+                                            </DockPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
+                        </Border>
+                        <Border Grid.Column="2" Style="{StaticResource CardBorder}" Padding="14">
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Top">
+                                    <TextBlock Text="Xử lý thí sinh" Style="{StaticResource H2}" Margin="0"/>
+                                    <TextBlock x:Name="SelLine" Style="{StaticResource Hint}" Margin="0,2,0,8" Text="Chọn một thí sinh trong danh sách."/>
+                                    <UniformGrid Columns="2">
+                                        <Button x:Name="WarnBtn" Content="Nhắc nhở" Style="{StaticResource BtnWarn}" Margin="0,0,4,6" Click="Warn_Click"/>
+                                        <Button x:Name="RevokeBtn" Content="Thu bài · huỷ KQ" Style="{StaticResource BtnDanger}" Margin="4,0,0,6" Click="Revoke_Click"/>
+                                        <Button x:Name="MoveBtn" Content="Chuyển máy" Margin="0,0,4,6" Click="Move_Click"/>
+                                        <Button x:Name="ExtraBtn" Content="+5 phút riêng" Margin="4,0,0,6" Click="Extra_Click"/>
+                                    </UniformGrid>
+                                    <Button x:Name="EditReqBtn" Content="Yêu cầu sửa thông tin" Click="EditReq_Click"/>
+                                    <TextBlock x:Name="DiscTitle" FontSize="11" FontWeight="Bold" Foreground="{StaticResource Muted}" Margin="0,10,0,4"/>
+                                </StackPanel>
+                                <ListBox x:Name="DiscList" BorderThickness="0" SelectionChanged="Disc_SelectionChanged">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <DockPanel>
+                                                <TextBlock Text="{Binding Discipline}" DockPanel.Dock="Right" FontWeight="Bold" Foreground="#9A3412" FontSize="11"/>
+                                                <TextBlock FontSize="12"><Run Text="{Binding Machine, Mode=OneWay}" FontWeight="Bold"/><Run Text=" · "/><Run Text="{Binding FullName, Mode=OneWay}"/></TextBlock>
+                                            </DockPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
+
+                <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <Border Style="{StaticResource CardBorder}">
+                            <StackPanel>
+                                <DockPanel>
+                                    <Button x:Name="SwapBtn" DockPanel.Dock="Right" Content="Đổi bộ đề" MinHeight="32" Click="Swap_Click"/>
+                                    <TextBlock Text="Bộ đề" Style="{StaticResource H2}"/>
+                                </DockPanel>
+                                <TextBlock x:Name="PkgName" FontWeight="Bold"/>
+                                <TextBlock x:Name="PkgAuthor" Style="{StaticResource Hint}" Margin="0,0,0,8"/>
+                                <TextBlock Text="🔒 THÔNG TIN TỪ BỘ ĐỀ · KHÔNG THAY ĐỔI" FontSize="11" FontWeight="Bold" Foreground="{StaticResource Muted}"/>
+                                <ItemsControl x:Name="PkgInfo" Margin="0,4,0,0">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <DockPanel Margin="0,3">
+                                                <TextBlock Text="{Binding V}" FontWeight="SemiBold" DockPanel.Dock="Right"/>
+                                                <TextBlock Text="{Binding K}" Foreground="{StaticResource Muted}"/>
+                                            </DockPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBlock Text="QUY ĐỊNH PHÒNG THI" FontSize="11" FontWeight="Bold" Foreground="{StaticResource Muted}" Margin="0,14,0,4"/>
+                                <DockPanel>
+                                    <ComboBox x:Name="WindowBox" DockPanel.Dock="Right" Width="140" SelectionChanged="Window_Changed">
+                                        <ComboBoxItem Content="5 phút cuối" Tag="5"/>
+                                        <ComboBoxItem Content="10 phút cuối" Tag="10"/>
+                                        <ComboBoxItem Content="15 phút cuối" Tag="15" IsSelected="True"/>
+                                        <ComboBoxItem Content="30 phút cuối" Tag="30"/>
+                                    </ComboBox>
+                                    <TextBlock Text="Cho nộp bài &amp; thu bài trong" VerticalAlignment="Center"/>
+                                </DockPanel>
+                                <CheckBox x:Name="ShowScoreBox" Content="Hiện điểm trắc nghiệm khi thí sinh nộp bài" Margin="0,10,0,0" Checked="ShowScore_Changed" Unchecked="ShowScore_Changed"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource CardBorder}" Margin="0,14,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Kết quả" Style="{StaticResource H2}"/>
+                                <TextBlock x:Name="BackupLine" Style="{StaticResource Hint}"/>
+                                <ProgressBar x:Name="BackupBar" Height="6" Maximum="30" Margin="0,6,0,12" Foreground="{StaticResource Ok}"/>
+                                <StackPanel x:Name="Preview" Visibility="Collapsed">
+                                    <TextBlock Text="BIÊN BẢN PHÒNG THI (PDF)" FontSize="11" FontWeight="Bold" Foreground="#1E3A8A"/>
+                                    <TextBlock x:Name="ReportText" TextWrapping="Wrap" Margin="0,4,0,10"/>
+                                    <TextBlock Text="PHÂN TÍCH ĐỀ · CÂU CÓ TỈ LỆ ĐÚNG THẤP" FontSize="11" FontWeight="Bold" Foreground="#1E3A8A"/>
+                                    <TextBlock x:Name="AnalysisText" TextWrapping="Wrap" Margin="0,4,0,10"/>
+                                </StackPanel>
+                                <Button x:Name="ExportBtn" Content="⬇  Xuất kết quả" Style="{StaticResource BtnOk}" MinHeight="50" Click="Export_Click"/>
+                                <TextBlock x:Name="ExportHint" Style="{StaticResource Hint}" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

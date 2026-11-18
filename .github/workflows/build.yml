@@ -1,0 +1,85 @@
+name: Build iTest
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Xác định phiên bản
+        id: ver
+        shell: pwsh
+        run: |
+          $v = "1.0.0"
+          if ("${{ github.ref_type }}" -eq "tag") { $v = "${{ github.ref_name }}".TrimStart('v') }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build & publish 3 ứng dụng (self-contained, 1 file)
+        shell: pwsh
+        run: |
+          $common = @('-c','Release','-r','win-x64','--self-contained','true',
+                      '-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true',
+                      '-p:EnableCompressionInSingleFile=true',"-p:Version=${{ steps.ver.outputs.version }}")
+          dotnet publish src/iTest.Client/iTest.Client.csproj @common -o publish/iTest
+          dotnet publish src/iTest.Server/iTest.Server.csproj @common -o publish/iTest-Server
+          dotnet publish src/iTest.Editor/iTest.Editor.csproj @common -o publish/iTest-Editor
+
+      - name: Cài Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
+      - name: Tạo bộ cài .exe
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          foreach ($f in 'iTest','iTest-Server','iTest-Editor') {
+            & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" "installer\$f.iss"
+            if ($LASTEXITCODE -ne 0) { throw "ISCC lỗi với $f" }
+          }
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iTest-Setup-${{ steps.ver.outputs.version }}
+          path: dist/*.exe
+
+      - name: Phát hành (khi đẩy tag v*)
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          generate_release_notes: true
+
+  website:
+    if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Gắn đường dẫn tải xuống của repo này
+        run: sed -i "s#__REPO__#${{ github.repository }}#g" website/index.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: website
+      - id: deploy
+        uses: actions/deploy-pages@v4

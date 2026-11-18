@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <Version>1.0.0</Version>
+    <Company>iTest</Company>
+    <Copyright>© 2026 iTest</Copyright>
+    <SatelliteResourceLanguages>vi;en</SatelliteResourceLanguages>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CA1416;NU1603</NoWarn>
+  </PropertyGroup>
+</Project>
