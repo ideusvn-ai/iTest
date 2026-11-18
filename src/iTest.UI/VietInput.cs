@@ -42,16 +42,82 @@ public static class VietInput
 
 public static class Anim
 {
+    private static readonly IEasingFunction Ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+
     public static void FadeIn(UIElement el, double seconds = 0.35)
     {
         el.Opacity = 0;
-        el.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromSeconds(seconds))
-        { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+        el.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromSeconds(seconds)) { EasingFunction = Ease });
     }
 
-    public static void Show(FrameworkElement el)
+    /// <summary>Hiện một khung: mờ dần lên và trượt nhẹ từ dưới lên.</summary>
+    public static void Show(FrameworkElement el, double seconds = 0.35)
     {
         el.Visibility = Visibility.Visible;
-        FadeIn(el);
+        var tt = el.RenderTransform as System.Windows.Media.TranslateTransform;
+        if (tt == null || tt.IsFrozen) { tt = new System.Windows.Media.TranslateTransform(); el.RenderTransform = tt; }
+        tt.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, new DoubleAnimation(14, 0, TimeSpan.FromSeconds(seconds + 0.1)) { EasingFunction = Ease });
+        FadeIn(el, seconds);
+    }
+}
+
+/// <summary>
+/// Cuộn mượt bằng bánh xe chuột cho mọi ScrollViewer cuộn theo pixel trong ứng dụng.
+/// Gọi <see cref="Enable"/> một lần khi khởi động.
+/// </summary>
+public static class SmoothScroll
+{
+    private sealed class State { public double Target; public bool Running; }
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ScrollViewer, State> States = new();
+    private static bool _enabled;
+
+    public static void Enable()
+    {
+        if (_enabled) return;
+        _enabled = true;
+        EventManager.RegisterClassHandler(typeof(ScrollViewer), UIElement.PreviewMouseWheelEvent, new MouseWheelEventHandler(OnWheel), true);
+    }
+
+    private static ScrollViewer? Innermost(DependencyObject? d, int delta)
+    {
+        while (d != null)
+        {
+            if (d is ScrollViewer sv && sv.ScrollableHeight > 0 && !sv.CanContentScroll)
+            {
+                bool canMove = delta < 0 ? sv.VerticalOffset < sv.ScrollableHeight - 0.5 : sv.VerticalOffset > 0.5;
+                if (canMove) return sv;
+            }
+            d = d is System.Windows.Media.Visual || d is System.Windows.Media.Media3D.Visual3D
+                ? System.Windows.Media.VisualTreeHelper.GetParent(d)
+                : LogicalTreeHelper.GetParent(d);
+        }
+        return null;
+    }
+
+    private static void OnWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (e.Handled || sender is not ScrollViewer sv || sv.CanContentScroll) return;
+        var target = Innermost(e.OriginalSource as DependencyObject, e.Delta);
+        if (target != sv) return;
+        var st = States.GetValue(sv, _ => new State { Target = sv.VerticalOffset });
+        if (!st.Running) st.Target = sv.VerticalOffset;
+        st.Target = Math.Max(0, Math.Min(sv.ScrollableHeight, st.Target - e.Delta * 0.9));
+        e.Handled = true;
+        if (st.Running) return;
+        st.Running = true;
+        EventHandler? tick = null;
+        tick = (_, _) =>
+        {
+            double cur = sv.VerticalOffset;
+            double next = cur + (st.Target - cur) * 0.22;
+            if (Math.Abs(st.Target - next) < 0.5) next = st.Target;
+            sv.ScrollToVerticalOffset(next);
+            if (next == st.Target || !sv.IsLoaded)
+            {
+                System.Windows.Media.CompositionTarget.Rendering -= tick;
+                st.Running = false;
+            }
+        };
+        System.Windows.Media.CompositionTarget.Rendering += tick;
     }
 }

@@ -1,13 +1,15 @@
 <Window x:Class="ITest.Editor.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="iTest-Editor" Width="1400" Height="880" WindowState="Maximized" WindowStartupLocation="CenterScreen"
+        Title="iTest-Editor" Icon="app.ico"
         Style="{StaticResource AppWindow}">
     <Grid>
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
 
         <Border Background="White" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="20,10">
             <DockPanel>
+                <Button x:Name="QuitBtn" DockPanel.Dock="Right" Content="Thoát" Margin="8,0,0,0" VerticalAlignment="Center" Click="Quit_Click"
+                        ToolTip="Thoát iTest-Editor. Nếu bộ đề chưa đóng gói, phiên làm việc được lưu để mở lại lần sau."/>
                 <WrapPanel x:Name="EditButtons" DockPanel.Dock="Right" Visibility="Collapsed" VerticalAlignment="Center">
                     <Button Content="+ Tạo bộ đề mới" Margin="0,0,8,0" Click="NewSet_Click"/>
                     <Button Content="Nhập từ Word" Margin="0,0,8,0" Click="ImportWord_Click"/>

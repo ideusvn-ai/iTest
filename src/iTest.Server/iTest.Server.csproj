@@ -10,6 +10,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
+    <ApplicationIcon>..\..\assets\iTest-Server.ico</ApplicationIcon>
     <Product>iTest-Server</Product>
     <Description>iTest-Server – bảng điều khiển phòng thi</Description>
   </PropertyGroup>
@@ -17,6 +18,10 @@
   <ItemGroup>
     <PackageReference Include="ClosedXML" Version="0.104.*" />
     <PackageReference Include="QuestPDF" Version="2024.12.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="..\..\assets\iTest-Server.ico" Link="app.ico" />
   </ItemGroup>
 
   <ItemGroup>

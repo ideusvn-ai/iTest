@@ -19,6 +19,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 WizardStyle=modern
 UninstallDisplayIcon={app}\{#AppExe}
+SetupIconFile=..\assets\{#AppDir}.ico
 MinVersion=10.0
 
 [Languages]

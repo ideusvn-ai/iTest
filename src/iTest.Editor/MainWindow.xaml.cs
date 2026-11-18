@@ -19,6 +19,8 @@ public partial class MainWindow : Window
     private Draft? _draft;
     private bool _editingMeta;
     private bool _loading;
+    private bool _packed;
+    private static readonly string SessionFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "iTest-Editor", "session.txt");
     private readonly ObservableCollection<QuestionRow> _rows = new();
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(800) };
     private readonly List<TextBox> _optBoxes = new();
@@ -41,7 +43,8 @@ public partial class MainWindow : Window
         BuildOptionEditors();
         RefreshDrafts();
         UpdateFormTotal();
-        Closing += (_, _) => { if (_draft != null) SaveNow(); };
+        Closing += (_, _) => { if (_draft != null) { SaveNow(); RememberSession(); } };
+        RestoreSession();
     }
 
     // ===================== Trang đầu =====================
@@ -330,11 +333,52 @@ public partial class MainWindow : Window
 
     private void Changed()
     {
+        _packed = false;
         (QList.SelectedItem as QuestionRow)?.Refresh();
         UpdateMissing();
         RefreshSide();
         SaveText.Text = "Đang lưu bản nháp…";
         _saveTimer.Stop(); _saveTimer.Start();
+    }
+
+    // ===================== Phiên làm việc =====================
+    private void RememberSession()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(SessionFile)!);
+            if (_draft != null && !_packed) File.WriteAllText(SessionFile, _draft.Id);
+            else if (File.Exists(SessionFile)) File.Delete(SessionFile);
+        }
+        catch { }
+    }
+
+    private void RestoreSession()
+    {
+        try
+        {
+            if (!File.Exists(SessionFile)) return;
+            var id = File.ReadAllText(SessionFile).Trim();
+            var d = Draft.All().FirstOrDefault(x => x.Id == id);
+            if (d == null) return;
+            _draft = d;
+            OpenEditor();
+            SaveText.Text = $"Đã mở lại phiên làm việc trước · bản nháp lưu lúc {d.SavedAt:HH:mm dd/MM}";
+        }
+        catch { }
+    }
+
+    private void Quit_Click(object sender, RoutedEventArgs e)
+    {
+        if (_draft != null)
+        {
+            SaveNow();
+            RememberSession();
+            if (!_packed && MessageBox.Show(this, "Bộ đề chưa đóng gói. Phiên làm việc đã được lưu và sẽ tự mở lại lần sau.\n\nThoát iTest-Editor?",
+                    "Thoát", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        }
+        else RememberSession();
+        Close();
     }
 
     private void SaveNow()
@@ -491,6 +535,8 @@ public partial class MainWindow : Window
         {
             x.CreatedAt = DateTime.Now;
             ExamPackage.Save(dlg.FileName, x, _draft.LoadMedia(), _draft.Locked ? _draft.Password : null);
+            _packed = true;
+            RememberSession();
             MessageBox.Show(this, $"Đã đóng gói bộ đề:\n{dlg.FileName}\n\n{(_draft.Locked ? "Hãy gửi mật khẩu cho giám thị qua kênh riêng." : "Bộ đề không đặt mật khẩu.")}",
                 "Đóng gói bộ câu hỏi", MessageBoxButton.OK, MessageBoxImage.Information);
             if (MessageBox.Show(this, "Xoá bản nháp này khỏi danh sách bản nháp?", "iTest-Editor", MessageBoxButton.YesNo) == MessageBoxResult.Yes)

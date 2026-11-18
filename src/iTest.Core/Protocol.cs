@@ -41,6 +41,8 @@ public static class Msg
 public sealed class RoomBeacon
 {
     public string App { get; set; } = "iTest";
+    /// <summary>Mã định danh phiên của máy chủ, dùng để gộp các gói tin trùng.</summary>
+    public string ServerId { get; set; } = "";
     public string Room { get; set; } = "";
     public string Exam { get; set; } = "";
     public string Proctor { get; set; } = "";

@@ -394,6 +394,22 @@ public sealed class RoomService : IDisposable
         Log("CỘNG GIỜ", c.Machine, $"được cộng thêm {minutes} phút riêng · {c.FullName}");
     }
 
+    /// <summary>Ngắt một máy không đang làm bài: máy thí sinh nhận lệnh thoát ứng dụng.</summary>
+    public void Disconnect(Candidate c)
+    {
+        if (c.IsActive || c.Conn == null) return;
+        var conn = c.Conn;
+        conn.Send(Msg.Release);
+        c.Conn = null;
+        Task.Delay(500).ContinueWith(_ => conn.Close());
+        if (c.Status is CandStatus.Waiting or CandStatus.Connected)
+        {
+            Candidates.Remove(c);
+            for (int i = 0; i < Candidates.Count; i++) Candidates[i].Index = i;
+        }
+        Log("NGẮT KẾT NỐI", c.Machine, $"giám thị đã ngắt kết nối · {c.FullName} · iTest trên máy đã thoát");
+    }
+
     public void RequestEdit(Candidate c, string reason)
     {
         if (Phase != Phase.Open || c.Conn == null) return;
@@ -406,6 +422,7 @@ public sealed class RoomService : IDisposable
     private static readonly Dictionary<string, (Color bg, Color fg)> TagColors = new()
     {
         ["THAM GIA"] = (Color.FromRgb(0xDB, 0xEA, 0xFE), Color.FromRgb(0x1E, 0x3A, 0x8A)),
+        ["NGẮT KẾT NỐI"] = (Color.FromRgb(0xF1, 0xF5, 0xF9), Color.FromRgb(0x47, 0x55, 0x69)),
         ["NGOẠI TUYẾN"] = (Color.FromRgb(0xFE, 0xE2, 0xE2), Color.FromRgb(0xB9, 0x1C, 0x1C)),
         ["NỘP BÀI"] = (Color.FromRgb(0xDC, 0xFC, 0xE7), Color.FromRgb(0x16, 0x65, 0x34)),
         ["NHẮC NHỞ"] = (Color.FromRgb(0xFE, 0xF3, 0xC7), Color.FromRgb(0x78, 0x35, 0x0F)),

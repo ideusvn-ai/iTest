@@ -88,7 +88,7 @@ public partial class MainWindow : Window
 
     private void OnBeacon(RoomBeacon b)
     {
-        var existing = _rooms.FirstOrDefault(r => r.Beacon.Address == b.Address && r.Beacon.Port == b.Port);
+        var existing = _rooms.FirstOrDefault(r => r.Beacon.ServerId == b.ServerId);
         if (existing != null) { existing.Update(b); }
         else _rooms.Add(new RoomItem(b));
         ScanText.Text = $"Tìm thấy {_rooms.Count} phòng thi trong mạng LAN";
@@ -169,6 +169,7 @@ public partial class MainWindow : Window
         foreach (var tb in new[] { SbdBox, NameBox, DobBox, ClassBox }) tb.IsEnabled = !locked;
         AgreeBox.IsEnabled = !locked;
         RegisterBtn.Visibility = locked ? Visibility.Collapsed : Visibility.Visible;
+        QuitInfoBtn.Visibility = locked || _registered ? Visibility.Collapsed : Visibility.Visible;
         WaitBox.Visibility = locked ? Visibility.Visible : Visibility.Collapsed;
         if (locked)
         {
@@ -238,7 +239,7 @@ public partial class MainWindow : Window
                 WaitTitle.Text = "Giám thị đã kết thúc phiên thi";
                 WaitSub.Text = "Bạn có thể thoát ứng dụng.";
                 ExitBtn.Visibility = Visibility.Visible;
-                if (!_examRunning && !_submitted) { Close(); }
+                if (!_examRunning || _submitted) { Close(); }
                 else if (_examRunning && !_submitted)
                 {
                     // Giám thị cho chuyển máy: phiên trên máy này kết thúc, bài làm đã ở máy chủ
@@ -738,6 +739,14 @@ public partial class MainWindow : Window
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
+
+    /// <summary>Thoát khi chưa vào phòng chờ (sau khi đăng ký chỉ máy chủ mới cho thoát).</summary>
+    private void Quit_Click(object sender, RoutedEventArgs e)
+    {
+        if (_examRunning || _registered && !_released) return;
+        _conn?.Close();
+        Close();
+    }
 
     // ---- Lưu cục bộ (phòng mất kết nối / mất điện) ----
     private void SaveLocal()

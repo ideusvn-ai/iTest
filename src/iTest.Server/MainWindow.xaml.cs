@@ -268,6 +268,7 @@ public partial class MainWindow : Window
         EditReqBtn.IsEnabled = c != null && r?.Phase == Phase.Open && c.Conn != null && !c.EditRequested;
         EditReqBtn.Content = c != null && c.EditRequested ? "✓ Đã gửi yêu cầu sửa thông tin" : "Yêu cầu sửa thông tin";
         WarnBtn.Content = c?.WarnedAt != null ? $"Đã nhắc ({c.WarnedAt})" : "Nhắc nhở";
+        KickBtn.IsEnabled = c != null && c.Conn != null && !c.IsActive;
     }
 
     // ================== Nút điều khiển ==================
@@ -316,6 +317,21 @@ public partial class MainWindow : Window
         if (MessageBox.Show(this, $"Cho phép {_sel.FullName} chuyển sang máy khác?\n\nThí sinh mở iTest trên máy dự phòng, chọn phòng và nhập đúng SBD {_sel.Sbd}. Bài làm và thời gian còn lại được giữ nguyên.",
                 "Chuyển máy", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
             _room.ApproveMove(_sel);
+    }
+
+    private void Kick_Click(object sender, RoutedEventArgs e)
+    {
+        if (_room == null || _sel == null) return;
+        if (_sel.IsActive) { MessageBox.Show(this, "Thí sinh đang làm bài: chỉ có thể chuyển máy, không ngắt kết nối.", "Ngắt kết nối"); return; }
+        if (MessageBox.Show(this, $"Ngắt kết nối {_sel.Machine} ({_sel.FullName})? iTest trên máy đó sẽ tự thoát.", "Ngắt kết nối", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        _room.Disconnect(_sel);
+        _sel = null;
+        Refresh();
+    }
+
+    private void Quit_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show(this, "Thoát iTest-Server?", "Thoát", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes) Close();
     }
 
     private void Extra_Click(object sender, RoutedEventArgs e) { if (_room != null && _sel != null) _room.AddMinutes(_sel, 5); }
@@ -416,7 +432,7 @@ public static class Prompt
         var w = new Window
         {
             Owner = owner, Title = title, Width = 480, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            ResizeMode = ResizeMode.NoResize, Style = (Style)owner.FindResource("AppWindow")
+            ResizeMode = ResizeMode.NoResize, Style = (Style)owner.FindResource("DialogWindow")
         };
         var panel = new StackPanel { Margin = new Thickness(20) };
         panel.Children.Add(new TextBlock { Text = label, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });

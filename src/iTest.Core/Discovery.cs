@@ -7,12 +7,15 @@ using System.Text.Json;
 
 namespace ITest.Core;
 
-/// <summary>Máy chủ phát gói quảng bá phòng thi mỗi 2 giây.</summary>
+/// <summary>
+/// Máy chủ phát gói quảng bá phòng thi mỗi 2 giây, CHỈ qua card mạng LAN chính
+/// (bỏ qua card ảo VMware/VirtualBox/Hyper-V…), nên thí sinh chỉ thấy đúng một địa chỉ IP của máy chủ.
+/// </summary>
 public sealed class BeaconSender : IDisposable
 {
-    private readonly UdpClient _udp = new() { EnableBroadcast = true };
     private readonly Func<RoomBeacon> _factory;
     private readonly CancellationTokenSource _cts = new();
+    public string ServerId { get; } = Guid.NewGuid().ToString("N");
 
     public BeaconSender(Func<RoomBeacon> factory) => _factory = factory;
 
@@ -22,17 +25,21 @@ public sealed class BeaconSender : IDisposable
         {
             try
             {
-                var bytes = JsonSerializer.SerializeToUtf8Bytes(_factory(), ExamPackage.Json);
-                await _udp.SendAsync(bytes, bytes.Length, new IPEndPoint(IPAddress.Broadcast, Ports.Discovery));
-                foreach (var b in NetUtil.BroadcastAddresses())
-                    await _udp.SendAsync(bytes, bytes.Length, new IPEndPoint(b, Ports.Discovery));
+                var nic = NetUtil.Primary();
+                var beacon = _factory();
+                beacon.ServerId = ServerId;
+                beacon.Address = nic.Address.ToString();
+                var bytes = JsonSerializer.SerializeToUtf8Bytes(beacon, ExamPackage.Json);
+                using var udp = new UdpClient(new IPEndPoint(nic.Address, 0)) { EnableBroadcast = true };
+                await udp.SendAsync(bytes, bytes.Length, new IPEndPoint(nic.Broadcast, Ports.Discovery));
+                await udp.SendAsync(bytes, bytes.Length, new IPEndPoint(IPAddress.Broadcast, Ports.Discovery));
             }
             catch { }
             try { await Task.Delay(2000, _cts.Token); } catch { }
         }
     });
 
-    public void Dispose() { _cts.Cancel(); _udp.Dispose(); }
+    public void Dispose() => _cts.Cancel();
 }
 
 /// <summary>Máy thí sinh lắng nghe gói quảng bá, chỉ nhận phòng cùng workgroup.</summary>
@@ -58,7 +65,8 @@ public sealed class BeaconListener : IDisposable
                     var b = JsonSerializer.Deserialize<RoomBeacon>(r.Buffer, ExamPackage.Json);
                     if (b == null || b.App != "iTest") continue;
                     if (!string.Equals(b.Workgroup, Workgroup, StringComparison.OrdinalIgnoreCase)) continue;
-                    b.Address = r.RemoteEndPoint.Address.ToString();
+                    if (string.IsNullOrEmpty(b.Address)) b.Address = r.RemoteEndPoint.Address.ToString();
+                    if (string.IsNullOrEmpty(b.ServerId)) b.ServerId = b.Address;
                     Found?.Invoke(b);
                 }
                 catch (OperationCanceledException) { break; }
@@ -94,31 +102,43 @@ public static class NetUtil
         return "WORKGROUP";
     }
 
-    public static string LocalIPv4()
-    {
-        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
-        {
-            if (ni.OperationalStatus != OperationalStatus.Up || ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
-            foreach (var ua in ni.GetIPProperties().UnicastAddresses)
-                if (ua.Address.AddressFamily == AddressFamily.InterNetwork) return ua.Address.ToString();
-        }
-        return "127.0.0.1";
-    }
+    public sealed record Nic(IPAddress Address, IPAddress Broadcast, string Name);
 
-    public static IEnumerable<IPAddress> BroadcastAddresses()
+    private static readonly string[] VirtualWords = { "virtual", "vmware", "virtualbox", "hyper-v", "vethernet", "loopback", "pseudo", "tap-", "tunnel", "bluetooth", "wsl", "docker", "zerotier", "hamachi", "vpn" };
+
+    /// <summary>Card mạng LAN chính: đang hoạt động, có IPv4, ưu tiên card có gateway và không phải card ảo.</summary>
+    public static Nic Primary()
     {
+        Nic? best = null; int bestScore = int.MinValue;
         foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
         {
-            if (ni.OperationalStatus != OperationalStatus.Up || ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
-            foreach (var ua in ni.GetIPProperties().UnicastAddresses)
+            if (ni.OperationalStatus != OperationalStatus.Up) continue;
+            if (ni.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel) continue;
+            var props = ni.GetIPProperties();
+            foreach (var ua in props.UnicastAddresses)
             {
                 if (ua.Address.AddressFamily != AddressFamily.InterNetwork || ua.IPv4Mask == null) continue;
-                var ip = ua.Address.GetAddressBytes();
-                var mask = ua.IPv4Mask.GetAddressBytes();
-                var bc = new byte[4];
-                for (int i = 0; i < 4; i++) bc[i] = (byte)(ip[i] | ~mask[i]);
-                yield return new IPAddress(bc);
+                var ipb = ua.Address.GetAddressBytes();
+                if (ipb[0] == 169 && ipb[1] == 254) continue; // APIPA
+                int score = 0;
+                if (props.GatewayAddresses.Any(g => g.Address.AddressFamily == AddressFamily.InterNetwork && !g.Address.Equals(IPAddress.Any))) score += 100;
+                var desc = (ni.Description + " " + ni.Name).ToLowerInvariant();
+                if (VirtualWords.Any(desc.Contains)) score -= 200;
+                if (ni.NetworkInterfaceType is NetworkInterfaceType.Ethernet or NetworkInterfaceType.GigabitEthernet) score += 20;
+                if (ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211) score += 10;
+                if (ipb[0] == 10 || ipb[0] == 192 && ipb[1] == 168 || ipb[0] == 172 && ipb[1] >= 16 && ipb[1] <= 31) score += 5;
+                if (score > bestScore)
+                {
+                    var mask = ua.IPv4Mask.GetAddressBytes();
+                    var bc = new byte[4];
+                    for (int i = 0; i < 4; i++) bc[i] = (byte)(ipb[i] | ~mask[i]);
+                    best = new Nic(ua.Address, new IPAddress(bc), ni.Name);
+                    bestScore = score;
+                }
             }
         }
+        return best ?? new Nic(IPAddress.Loopback, IPAddress.Broadcast, "loopback");
     }
+
+    public static string LocalIPv4() => Primary().Address.ToString();
 }

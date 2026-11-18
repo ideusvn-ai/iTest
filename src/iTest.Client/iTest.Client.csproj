@@ -9,10 +9,15 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
+    <ApplicationIcon>..\..\assets\iTest.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Product>iTest</Product>
     <Description>iTest – ứng dụng làm bài thi cho máy thí sinh</Description>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="..\..\assets\iTest.ico" Link="app.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\iTest.Core\iTest.Core.csproj" />
