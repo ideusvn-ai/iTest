@@ -68,7 +68,11 @@ jobs:
           generate_release_notes: true
 
   website:
+    # Cần bật một lần: Settings → Pages → Source: GitHub Actions.
+    # Nếu chưa bật, bước này chỉ báo cảnh báo và không làm hỏng lần build.
     if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
+    needs: build
+    continue-on-error: true
     runs-on: ubuntu-latest
     environment:
       name: github-pages
