@@ -103,7 +103,8 @@ jobs:
   website:
     # Cần bật một lần: Settings → Pages → Source: GitHub Actions.
     # Nếu chưa bật, bước này chỉ báo cảnh báo và không làm hỏng lần build.
-    if: github.ref == 'refs/heads/main' || github.ref_type == 'tag'
+    # Chỉ đăng web từ nhánh main: môi trường github-pages chặn đăng từ tag.
+    if: github.ref == 'refs/heads/main'
     needs: build
     continue-on-error: true
     runs-on: ubuntu-latest
