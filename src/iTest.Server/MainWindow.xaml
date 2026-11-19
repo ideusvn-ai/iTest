@@ -4,6 +4,34 @@
         Title="iTest-Server" Icon="app.ico"
         Style="{StaticResource AppWindow}">
     <Grid>
+        <!-- ============ Đăng nhập quản trị ============ -->
+        <Grid x:Name="LoginPanel" Panel.ZIndex="10" Background="{StaticResource Ground}">
+            <Border Style="{StaticResource CardBorder}" Width="460" VerticalAlignment="Center" HorizontalAlignment="Center" Padding="30">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <Image Source="app.ico" Width="44" Height="44" RenderOptions.BitmapScalingMode="HighQuality"/>
+                        <StackPanel Margin="12,0,0,0">
+                            <TextBlock x:Name="LoginTitle" Text="Đăng nhập quản trị" Style="{StaticResource H1}"/>
+                            <TextBlock Text="iTest-Server · bảng điều khiển giám thị" Style="{StaticResource Hint}"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock x:Name="LoginHint" TextWrapping="Wrap" Margin="0,16,0,0" Foreground="{StaticResource Muted}"/>
+                    <TextBlock Text="Mật khẩu quản trị" Style="{StaticResource FieldLabel}" Margin="0,14,0,4"/>
+                    <PasswordBox x:Name="LoginPass" KeyDown="LoginPass_KeyDown"/>
+                    <StackPanel x:Name="LoginConfirmRow" Visibility="Collapsed">
+                        <TextBlock Text="Nhập lại mật khẩu" Style="{StaticResource FieldLabel}"/>
+                        <PasswordBox x:Name="LoginPass2" KeyDown="LoginPass_KeyDown"/>
+                    </StackPanel>
+                    <TextBlock x:Name="LoginError" Foreground="{StaticResource Bad}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                    <Grid Margin="0,14,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Button Content="Thoát" MinHeight="48" MinWidth="100" Click="LoginQuit_Click"/>
+                        <Button x:Name="LoginBtn" Grid.Column="2" Content="Đăng nhập" Style="{StaticResource BtnPrimary}" MinHeight="48" Click="Login_Click"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+        </Grid>
+
         <!-- ============ Thiết lập phòng thi ============ -->
         <ScrollViewer x:Name="SetupPanel" VerticalScrollBarVisibility="Auto">
             <Border Style="{StaticResource CardBorder}" Width="620" Margin="24" VerticalAlignment="Center" HorizontalAlignment="Center" Padding="28">
@@ -15,6 +43,16 @@
                             <TextBlock x:Name="HostLine" Style="{StaticResource Hint}"/>
                         </StackPanel>
                     </StackPanel>
+                    <Border x:Name="RecoverBox" Visibility="Collapsed" Margin="0,16,0,0" Background="#FFFBEB" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="12" Padding="14">
+                        <StackPanel>
+                            <TextBlock Text="⚠  Phát hiện phòng thi bị dừng đột ngột" FontWeight="Bold" Foreground="#92400E"/>
+                            <TextBlock x:Name="RecoverText" TextWrapping="Wrap" Margin="0,4,0,10" Foreground="#78350F"/>
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="Khôi phục phòng thi" Style="{StaticResource BtnWarn}" Click="Recover_Click"/>
+                                <Button Content="Bỏ qua" Margin="8,0,0,0" Click="DismissRecover_Click" ToolTip="Không khôi phục; bản sao lưu vẫn giữ trong thư mục Tài liệu\iTest-Server\SaoLuu"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
                     <TextBlock Text="Sở Giáo dục và Đào tạo" Style="{StaticResource FieldLabel}" Margin="0,18,0,4"/>
                     <TextBox x:Name="DeptBox"/>
                     <TextBlock Text="Trường" Style="{StaticResource FieldLabel}"/>
@@ -53,7 +91,10 @@
                     <TextBlock x:Name="SetupError" Foreground="{StaticResource Bad}" TextWrapping="Wrap" Margin="0,10,0,0"/>
                     <Grid Margin="0,14,0,0">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                        <Button Content="Thoát" MinHeight="50" MinWidth="110" Click="Quit_Click"/>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Thoát" MinHeight="50" MinWidth="110" Click="Quit_Click"/>
+                            <Button Content="Đổi mật khẩu" MinHeight="50" Margin="8,0,0,0" Style="{StaticResource BtnGhost}" Click="ChangePass_Click" ToolTip="Đổi mật khẩu quản trị iTest-Server"/>
+                        </StackPanel>
                         <Button Grid.Column="2" Content="Mở phòng thi" Style="{StaticResource BtnPrimary}" MinHeight="50" Click="OpenRoom_Click"/>
                     </Grid>
                 </StackPanel>
@@ -273,6 +314,8 @@
                                 </StackPanel>
                                 <Button x:Name="ExportBtn" Content="⬇  Xuất kết quả" Style="{StaticResource BtnOk}" MinHeight="50" Click="Export_Click"/>
                                 <TextBlock x:Name="ExportHint" Style="{StaticResource Hint}" Margin="0,8,0,0"/>
+                                <Button x:Name="SchoolExportBtn" Content="Xuất điểm cho SMAS / vnEdu…" Margin="0,10,0,0" MinHeight="42" Click="SchoolExport_Click"
+                                        ToolTip="Tạo file điểm theo lớp hoặc điền điểm vào file mẫu nhập điểm của phần mềm quản lý trường"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>

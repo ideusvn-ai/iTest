@@ -3,7 +3,38 @@ using System.Text.Json.Serialization;
 namespace ITest.Core;
 
 /// <summary>Loại câu hỏi.</summary>
-public enum QuestionType { MultipleChoice = 0, Essay = 1 }
+public enum QuestionType
+{
+    /// <summary>Trắc nghiệm một đáp án đúng.</summary>
+    MultipleChoice = 0,
+    /// <summary>Tự luận.</summary>
+    Essay = 1,
+    /// <summary>Trắc nghiệm nhiều đáp án đúng.</summary>
+    MultiSelect = 2,
+    /// <summary>Đúng/Sai theo từng ý (a, b, c, d).</summary>
+    TrueFalse = 3,
+    /// <summary>Trả lời ngắn (điền số hoặc cụm từ).</summary>
+    ShortAnswer = 4
+}
+
+public static class QuestionTypes
+{
+    public static bool IsObjective(this QuestionType t) => t != QuestionType.Essay;
+    public static bool HasOptions(this QuestionType t) => t is QuestionType.MultipleChoice or QuestionType.MultiSelect or QuestionType.TrueFalse;
+
+    public static string Label(this QuestionType t) => t switch
+    {
+        QuestionType.MultipleChoice => "Trắc nghiệm 1 đáp án",
+        QuestionType.MultiSelect => "Nhiều đáp án đúng",
+        QuestionType.TrueFalse => "Đúng/Sai từng ý",
+        QuestionType.ShortAnswer => "Trả lời ngắn",
+        _ => "Tự luận"
+    };
+
+    /// <summary>Chuẩn hoá câu trả lời ngắn để so sánh: bỏ khoảng trắng, chữ thường, dấu phẩy thập phân thành dấu chấm.</summary>
+    public static string NormalizeShort(string s) =>
+        new string((s ?? "").Trim().ToLowerInvariant().Replace(',', '.').Where(c => !char.IsWhiteSpace(c)).ToArray());
+}
 
 /// <summary>Một câu hỏi trong bộ đề (bản đầy đủ, có đáp án — chỉ nằm trong Editor/Server).</summary>
 public sealed class Question
@@ -12,8 +43,14 @@ public sealed class Question
     public QuestionType Type { get; set; }
     public string Text { get; set; } = "";
     public List<string> Options { get; set; } = new() { "", "", "", "" };
-    /// <summary>Chỉ số đáp án đúng (0..3), -1 nếu chưa chọn.</summary>
+    /// <summary>Chỉ số đáp án đúng (0..3), -1 nếu chưa chọn — câu một đáp án.</summary>
     public int Correct { get; set; } = -1;
+    /// <summary>Các đáp án đúng — câu nhiều đáp án.</summary>
+    public List<int> Corrects { get; set; } = new();
+    /// <summary>Đáp án từng ý (true = Đúng) — câu Đúng/Sai; null nghĩa là chưa chọn.</summary>
+    public List<bool?> TfKey { get; set; } = new();
+    /// <summary>Đáp án câu trả lời ngắn; nhiều đáp án chấp nhận được cách nhau bằng dấu ";".</summary>
+    public string ShortKey { get; set; } = "";
     public double Points { get; set; }
     /// <summary>Hướng dẫn chấm cho câu tự luận (không gửi cho thí sinh).</summary>
     public string Guide { get; set; } = "";
@@ -26,10 +63,23 @@ public sealed class Question
     {
         var m = new List<string>();
         if (string.IsNullOrWhiteSpace(Text)) m.Add("nội dung");
-        if (Type == QuestionType.MultipleChoice)
+        switch (Type)
         {
-            if (Options.Count < 2 || Options.Any(string.IsNullOrWhiteSpace)) m.Add("phương án");
-            if (Correct < 0 || Correct >= Options.Count) m.Add("đáp án đúng");
+            case QuestionType.MultipleChoice:
+                if (Options.Count < 2 || Options.Any(string.IsNullOrWhiteSpace)) m.Add("phương án");
+                if (Correct < 0 || Correct >= Options.Count) m.Add("đáp án đúng");
+                break;
+            case QuestionType.MultiSelect:
+                if (Options.Count < 2 || Options.Any(string.IsNullOrWhiteSpace)) m.Add("phương án");
+                if (Corrects.Count == 0 || Corrects.Any(i => i < 0 || i >= Options.Count)) m.Add("đáp án đúng");
+                break;
+            case QuestionType.TrueFalse:
+                if (Options.Count < 2 || Options.Any(string.IsNullOrWhiteSpace)) m.Add("các ý");
+                if (TfKey.Count != Options.Count || TfKey.Any(k => k == null)) m.Add("đáp án Đúng/Sai");
+                break;
+            case QuestionType.ShortAnswer:
+                if (string.IsNullOrWhiteSpace(ShortKey)) m.Add("đáp án");
+                break;
         }
         if (Points <= 0) m.Add("điểm");
         return m;
@@ -59,7 +109,8 @@ public sealed class ExamSet
     public DateTime CreatedAt { get; set; } = DateTime.Now;
     public List<Question> Questions { get; set; } = new();
 
-    [JsonIgnore] public IEnumerable<Question> McQuestions => Questions.Where(q => q.Type == QuestionType.MultipleChoice);
+    /// <summary>Các câu thuộc phần trắc nghiệm (mọi loại khách quan: một/nhiều đáp án, Đúng/Sai, trả lời ngắn).</summary>
+    [JsonIgnore] public IEnumerable<Question> McQuestions => Questions.Where(q => q.Type.IsObjective());
     [JsonIgnore] public IEnumerable<Question> EssayQuestions => Questions.Where(q => q.Type == QuestionType.Essay);
     [JsonIgnore] public double TotalPoints => Math.Round(Questions.Sum(q => q.Points), 2);
     [JsonIgnore] public bool IsComplete => Questions.Count > 0 && Questions.All(q => q.Missing().Count == 0);
@@ -82,10 +133,10 @@ public sealed class ExamSet
     /// <summary>Chia lại điểm cho một phần theo tổng điểm của phần đó.</summary>
     public void Distribute(QuestionType type)
     {
-        var qs = Questions.Where(q => q.Type == type).ToList();
-        var pts = Split(type == QuestionType.MultipleChoice ? McTotal : EssayTotal, qs.Count);
+        var qs = Questions.Where(q => q.Type.IsObjective() == type.IsObjective()).ToList();
+        var pts = Split(type.IsObjective() ? McTotal : EssayTotal, qs.Count);
         for (int i = 0; i < qs.Count; i++) qs[i].Points = pts[i];
-        if (type == QuestionType.MultipleChoice) McPoints = qs.Count > 0 ? Math.Round(McTotal / qs.Count, 4) : 0;
+        if (type.IsObjective()) McPoints = qs.Count > 0 ? Math.Round(McTotal / qs.Count, 4) : 0;
         else EssayPoints = qs.Count > 0 ? Math.Round(EssayTotal / qs.Count, 4) : 0;
     }
 
@@ -175,6 +226,16 @@ public sealed class AnswerSheet
     /// <summary>Số câu hiển thị → chỉ số phương án thí sinh chọn (theo thứ tự đã trộn).</summary>
     public Dictionary<int, int> Choices { get; set; } = new();
     public Dictionary<int, string> Essays { get; set; } = new();
+    /// <summary>Câu nhiều đáp án: số câu → các phương án đã chọn (theo thứ tự hiển thị).</summary>
+    public Dictionary<int, List<int>> Multi { get; set; } = new();
+    /// <summary>Câu Đúng/Sai: số câu → (chỉ số ý hiển thị → true/false).</summary>
+    public Dictionary<int, Dictionary<int, bool>> Tf { get; set; } = new();
+    /// <summary>Câu trả lời ngắn: số câu → câu trả lời.</summary>
+    public Dictionary<int, string> Short { get; set; } = new();
+
+    /// <summary>Số câu đã trả lời (mọi loại).</summary>
+    [JsonIgnore] public int AnsweredCount => Choices.Count + Multi.Count(kv => kv.Value.Count > 0) + Tf.Count(kv => kv.Value.Count > 0)
+        + Short.Count(kv => !string.IsNullOrWhiteSpace(kv.Value)) + Essays.Count(kv => !string.IsNullOrWhiteSpace(kv.Value));
     public DateTime? SubmittedAt { get; set; }
     public bool Revoked { get; set; }
     public int Warnings { get; set; }

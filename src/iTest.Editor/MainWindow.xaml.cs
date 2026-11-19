@@ -24,7 +24,8 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<QuestionRow> _rows = new();
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(800) };
     private readonly List<TextBox> _optBoxes = new();
-    private readonly List<RadioButton> _optRadios = new();
+    private TextBox? _mathTarget;
+    private static readonly QuestionType[] ObjectiveTypes = { QuestionType.MultipleChoice, QuestionType.MultiSelect, QuestionType.TrueFalse, QuestionType.ShortAnswer };
     private static readonly CultureInfo Vi = CultureInfo.GetCultureInfo("vi-VN");
     private static readonly string[] MathSymbols = { "√", "²", "³", "≤", "≥", "≠", "±", "×", "÷", "π", "Δ", "∞", "°", "∈", "∉", "⊂", "∩", "∪", "∅", "ℝ", "⇒", "⇔", "α", "β" };
 
@@ -37,10 +38,13 @@ public partial class MainWindow : Window
         foreach (var s in MathSymbols)
         {
             var b = new Button { Content = s, MinWidth = 32, MinHeight = 30, Padding = new Thickness(6, 0, 6, 0), Margin = new Thickness(0, 0, 4, 4) };
-            b.Click += (_, _) => VietInput.Insert(EText, s);
+            b.Click += (_, _) => VietInput.Insert(_mathTarget ?? EText, s);
             EMathBar.Children.Add(b);
         }
-        BuildOptionEditors();
+        foreach (var ty in ObjectiveTypes) EType.Items.Add(new ComboBoxItem { Content = ty.Label(), Tag = ty });
+        EText.GotKeyboardFocus += (_, _) => _mathTarget = EText;
+        EGuide.GotKeyboardFocus += (_, _) => _mathTarget = EGuide;
+        VietInput.Attach(EShortKey);
         RefreshDrafts();
         UpdateFormTotal();
         Closing += (_, _) => { if (_draft != null) { SaveNow(); RememberSession(); } };
@@ -257,7 +261,7 @@ public partial class MainWindow : Window
         foreach (var q in x.Questions)
         {
             string? header = null;
-            if (two && q.Type != last) header = q.Type == QuestionType.MultipleChoice ? $"PHẦN I · TRẮC NGHIỆM ({x.McQuestions.Count()})" : $"PHẦN II · TỰ LUẬN ({x.EssayQuestions.Count()})";
+            if (two && (last == null || q.Type.IsObjective() != last.Value.IsObjective())) header = q.Type.IsObjective() ? $"PHẦN I · TRẮC NGHIỆM ({x.McQuestions.Count()})" : $"PHẦN II · TỰ LUẬN ({x.EssayQuestions.Count()})";
             last = q.Type;
             _rows.Add(new QuestionRow(q, header));
         }
@@ -265,30 +269,124 @@ public partial class MainWindow : Window
 
     private Question? Cur => (QList.SelectedItem as QuestionRow)?.Q;
 
-    private void BuildOptionEditors()
+    private static readonly string[] TypeHints =
     {
+        "Thí sinh chọn một phương án đúng.",
+        "Thí sinh chọn tất cả phương án đúng; chỉ được điểm khi chọn đúng và đủ.",
+        "Mỗi ý chọn Đúng hoặc Sai. 4 ý: đúng 1 ý được 10%, 2 ý 25%, 3 ý 50%, 4 ý 100% điểm câu.",
+        "Thí sinh điền câu trả lời (số hoặc cụm từ ngắn); máy chấm tự động."
+    };
+
+    /// <summary>Dựng các ô phương án theo loại câu đang soạn.</summary>
+    private void BuildOptionEditors(Question q)
+    {
+        EOptions.Items.Clear();
+        _optBoxes.Clear();
+        if (!q.Type.HasOptions()) return;
+        while (q.Options.Count < 4) q.Options.Add("");
+        if (q.Type == QuestionType.TrueFalse) while (q.TfKey.Count < q.Options.Count) q.TfKey.Add(null);
+        EOptTitle.Text = q.Type switch
+        {
+            QuestionType.MultiSelect => "Phương án · đánh dấu tất cả đáp án đúng",
+            QuestionType.TrueFalse => "Các ý · chọn Đúng hoặc Sai cho từng ý",
+            _ => "Phương án · chọn đáp án đúng"
+        };
         var panel = new StackPanel();
-        for (int k = 0; k < 4; k++)
+        for (int k = 0; k < q.Options.Count; k++)
         {
             int idx = k;
             var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
-            var rb = new RadioButton { GroupName = "correct", Content = ((char)('A' + k)).ToString(), FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Width = 48, ToolTip = "Đặt làm đáp án đúng" };
-            rb.Checked += (_, _) => { if (_loading || Cur == null) return; Cur.Correct = idx; Changed(); };
-            var tb = new TextBox();
+            FrameworkElement mark;
+            switch (q.Type)
+            {
+                case QuestionType.MultiSelect:
+                    var cb = new CheckBox { Content = ((char)('A' + k)).ToString(), FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Width = 52, IsChecked = q.Corrects.Contains(k), ToolTip = "Là đáp án đúng" };
+                    cb.Checked += (_, _) => { if (_loading || Cur == null) return; if (!Cur.Corrects.Contains(idx)) Cur.Corrects.Add(idx); Cur.Corrects.Sort(); Changed(); };
+                    cb.Unchecked += (_, _) => { if (_loading || Cur == null) return; Cur.Corrects.Remove(idx); Changed(); };
+                    mark = cb;
+                    break;
+                case QuestionType.TrueFalse:
+                    var tf = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                    var lab = new TextBlock { Text = (char)('a' + k) + ")", FontWeight = FontWeights.Bold, Width = 26, VerticalAlignment = VerticalAlignment.Center };
+                    var rt = new RadioButton { GroupName = "tf" + k, Content = "Đúng", IsChecked = q.TfKey[k] == true, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+                    var rf = new RadioButton { GroupName = "tf" + k, Content = "Sai", IsChecked = q.TfKey[k] == false, Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
+                    rt.Checked += (_, _) => { if (_loading || Cur == null) return; SetTf(idx, true); };
+                    rf.Checked += (_, _) => { if (_loading || Cur == null) return; SetTf(idx, false); };
+                    tf.Children.Add(lab); tf.Children.Add(rt); tf.Children.Add(rf);
+                    mark = tf;
+                    break;
+                default:
+                    var rb = new RadioButton { GroupName = "correct", Content = ((char)('A' + k)).ToString(), FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Width = 52, IsChecked = q.Correct == k, ToolTip = "Đặt làm đáp án đúng" };
+                    rb.Checked += (_, _) => { if (_loading || Cur == null) return; Cur.Correct = idx; Changed(); };
+                    mark = rb;
+                    break;
+            }
+            var tb = new TextBox { Text = q.Options[k] };
             VietInput.Attach(tb);
+            tb.GotKeyboardFocus += (_, _) => _mathTarget = tb;
             tb.TextChanged += (_, _) =>
             {
                 if (_loading || Cur == null) return;
-                while (Cur.Options.Count < 4) Cur.Options.Add("");
+                while (Cur.Options.Count <= idx) Cur.Options.Add("");
                 Cur.Options[idx] = tb.Text;
                 Changed();
             };
-            DockPanel.SetDock(rb, Dock.Left);
-            row.Children.Add(rb); row.Children.Add(tb);
+            DockPanel.SetDock(mark, Dock.Left);
+            row.Children.Add(mark); row.Children.Add(tb);
             panel.Children.Add(row);
-            _optRadios.Add(rb); _optBoxes.Add(tb);
+            _optBoxes.Add(tb);
         }
         EOptions.Items.Add(panel);
+    }
+
+    private void SetTf(int idx, bool v)
+    {
+        if (Cur == null) return;
+        while (Cur.TfKey.Count <= idx) Cur.TfKey.Add(null);
+        Cur.TfKey[idx] = v;
+        Changed();
+    }
+
+    private void EType_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || Cur == null || EType.SelectedItem is not ComboBoxItem { Tag: QuestionType ty } || ty == Cur.Type) return;
+        Cur.Type = ty;
+        if (ty == QuestionType.TrueFalse && Cur.TfKey.Count == 0) Cur.TfKey = new List<bool?> { null, null, null, null };
+        LoadCurrent();
+        Changed();
+    }
+
+    private void EShortKey_Changed(object sender, TextChangedEventArgs e) { if (_loading || Cur == null) return; Cur.ShortKey = EShortKey.Text; Changed(); }
+
+    private void Formula_Click(object sender, RoutedEventArgs e)
+    {
+        var target = _mathTarget ?? EText;
+        var dlg = new FormulaDialog { Owner = this };
+        if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.Latex))
+            VietInput.Insert(target, "$" + dlg.Latex.Trim() + "$");
+    }
+
+    /// <summary>Xem trước câu hỏi khi có công thức toán.</summary>
+    private void UpdatePreview()
+    {
+        var q = Cur;
+        if (q == null) return;
+        bool any = RichMath.HasMath(q.Text) || (q.Type.HasOptions() && q.Options.Any(RichMath.HasMath));
+        EPreviewBox.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+        if (!any) { EPreview.Content = null; return; }
+        var sp = new StackPanel();
+        sp.Children.Add(RichMath.Block(q.Text, 16));
+        if (q.Type.HasOptions())
+            for (int k = 0; k < q.Options.Count; k++)
+            {
+                var label = q.Type == QuestionType.TrueFalse ? $"{(char)('a' + k)}) " : $"{(char)('A' + k)}. ";
+                var tb = RichMath.Block(null, 15);
+                tb.Margin = new Thickness(12, 4, 0, 0);
+                tb.Inlines.Add(new System.Windows.Documents.Run(label) { FontWeight = FontWeights.Bold });
+                RichMath.AddTo(tb.Inlines, q.Options[k], 15);
+                sp.Children.Add(tb);
+            }
+        EPreview.Content = sp;
     }
 
     private void QList_SelectionChanged(object sender, SelectionChangedEventArgs e) => LoadCurrent();
@@ -299,19 +397,22 @@ public partial class MainWindow : Window
         if (q == null) return;
         _loading = true;
         int no = _draft!.Exam.Questions.IndexOf(q) + 1;
-        EBadgeText.Text = $"Câu {no} · {(q.Type == QuestionType.MultipleChoice ? "Trắc nghiệm" : "Tự luận")}";
-        EBadge.Background = new SolidColorBrush(q.Type == QuestionType.MultipleChoice ? Color.FromRgb(0xDB, 0xEA, 0xFE) : Color.FromRgb(0xED, 0xE9, 0xFE));
+        EBadgeText.Text = $"Câu {no} · {q.Type.Label()}";
+        EBadge.Background = new SolidColorBrush(q.Type.IsObjective() ? Color.FromRgb(0xDB, 0xEA, 0xFE) : Color.FromRgb(0xED, 0xE9, 0xFE));
+        ETypeRow.Visibility = q.Type.IsObjective() ? Visibility.Visible : Visibility.Collapsed;
+        int ti = Array.IndexOf(ObjectiveTypes, q.Type);
+        EType.SelectedIndex = ti;
+        ETypeHint.Text = ti >= 0 ? TypeHints[ti] : "";
         EText.Text = q.Text;
         EPoints.Text = F(q.Points);
-        EMcPanel.Visibility = q.Type == QuestionType.MultipleChoice ? Visibility.Visible : Visibility.Collapsed;
+        EMcPanel.Visibility = q.Type.HasOptions() ? Visibility.Visible : Visibility.Collapsed;
+        EShortPanel.Visibility = q.Type == QuestionType.ShortAnswer ? Visibility.Visible : Visibility.Collapsed;
         EEsPanel.Visibility = q.Type == QuestionType.Essay ? Visibility.Visible : Visibility.Collapsed;
-        while (q.Type == QuestionType.MultipleChoice && q.Options.Count < 4) q.Options.Add("");
-        for (int k = 0; k < 4; k++)
-        {
-            _optBoxes[k].Text = q.Options.Count > k ? q.Options[k] : "";
-            _optRadios[k].IsChecked = q.Correct == k;
-        }
+        BuildOptionEditors(q);
+        EShortKey.Text = q.ShortKey;
         EGuide.Text = q.Guide;
+        _mathTarget = EText;
+        UpdatePreview();
         ShowMedia(q);
         _loading = false;
         UpdateMissing();
@@ -356,6 +457,7 @@ public partial class MainWindow : Window
         _packed = false;
         (QList.SelectedItem as QuestionRow)?.Refresh();
         UpdateMissing();
+        UpdatePreview();
         ScheduleSide();
         SaveText.Text = "Đang lưu bản nháp…";
         _saveTimer.Stop(); _saveTimer.Start();
@@ -524,15 +626,20 @@ public partial class MainWindow : Window
         int filled = 0, skipped = 0;
         foreach (var it in items)
         {
-            var slot = x.Questions.FirstOrDefault(q => q.Type == it.Type && string.IsNullOrWhiteSpace(q.Text) && (q.Type == QuestionType.Essay || q.Options.All(string.IsNullOrWhiteSpace)));
+            var slot = x.Questions.FirstOrDefault(q => q.Type.IsObjective() == it.Type.IsObjective() && string.IsNullOrWhiteSpace(q.Text) && (q.Type == QuestionType.Essay || q.Options.All(string.IsNullOrWhiteSpace)));
             if (slot == null) { skipped++; continue; }
+            slot.Type = it.Type;
             slot.Text = it.Text;
-            if (it.Type == QuestionType.MultipleChoice)
+            if (it.Type.HasOptions())
             {
                 slot.Options = it.Options.Take(4).ToList();
                 while (slot.Options.Count < 4) slot.Options.Add("");
                 slot.Correct = it.Correct;
+                slot.Corrects = it.Corrects.ToList();
+                slot.TfKey = it.TfKey.ToList();
             }
+            if (it.Type == QuestionType.ShortAnswer) slot.ShortKey = it.ShortKey;
+            if (it.Type == QuestionType.Essay && it.ShortKey.Length > 0) slot.Guide = it.ShortKey;
             if (it.Points is double p && p > 0) slot.Points = p;
             if (it.Image != null) slot.Image = _draft.AddMedia(it.Image, it.ImageExt);
             filled++;
@@ -545,6 +652,31 @@ public partial class MainWindow : Window
         foreach (var r in _rows) r.Refresh();
         LoadCurrent();
         Changed();
+    }
+
+    private void ExportPdf_Click(object sender, RoutedEventArgs e)
+    {
+        if (_draft == null) return;
+        SaveNow();
+        var x = _draft.Exam;
+        var opt = new PdfDialog(x) { Owner = this };
+        if (opt.ShowDialog() != true) return;
+        var name = string.Join("_", $"De_{x.Subject}_{x.ExamName}".Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Replace(' ', '_');
+        var dlg = new SaveFileDialog { Filter = "PDF (*.pdf)|*.pdf", FileName = name + ".pdf" };
+        if (dlg.ShowDialog(this) != true) return;
+        try
+        {
+            System.Windows.Input.Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+            ExamPdf.Export(dlg.FileName, x, _draft.MediaFolder, opt.Options);
+            System.Windows.Input.Mouse.OverrideCursor = null;
+            if (MessageBox.Show(this, "Đã xuất đề thi:\n" + dlg.FileName + "\n\nMở file ngay?", "iTest-Editor", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dlg.FileName) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            System.Windows.Input.Mouse.OverrideCursor = null;
+            MessageBox.Show(this, "Không xuất được PDF: " + ex.Message, "iTest-Editor", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void Template_Click(object sender, RoutedEventArgs e)
@@ -597,7 +729,7 @@ public sealed class QuestionRow : INotifyPropertyChanged
     public string PointsText => Math.Round(Q.Points, 2).ToString("0.##", CultureInfo.GetCultureInfo("vi-VN")) + "đ";
     public Brush DotBrush => Q.Missing().Count == 0 ? Brushes.ForestGreen : Brushes.Orange;
     public Visibility HeaderVisibility => Header == null ? Visibility.Collapsed : Visibility.Visible;
-    public Brush HeaderBrush => Q.Type == QuestionType.MultipleChoice ? new SolidColorBrush(Color.FromRgb(0x1E, 0x3A, 0x8A)) : new SolidColorBrush(Color.FromRgb(0x5B, 0x21, 0xB6));
+    public Brush HeaderBrush => Q.Type.IsObjective() ? new SolidColorBrush(Color.FromRgb(0x1E, 0x3A, 0x8A)) : new SolidColorBrush(Color.FromRgb(0x5B, 0x21, 0xB6));
 }
 
 public sealed class DraftItem

@@ -40,7 +40,9 @@ public sealed class Candidate : INotifyPropertyChanged
     public string BirthDate => Sheet.Candidate.BirthDate;
     public string ClassName => Sheet.Candidate.ClassName;
     public string Code => Sheet.Code;
-    public int Answered => Sheet.Choices.Count + Sheet.Essays.Count(kv => !string.IsNullOrWhiteSpace(kv.Value));
+    public int Answered => Sheet.AnsweredCount;
+    /// <summary>Số dấu hiệu gian lận máy thí sinh đã báo.</summary>
+    public int CheatCount { get; set; }
 
     public string StatusText => Status switch
     {
@@ -54,7 +56,8 @@ public sealed class Candidate : INotifyPropertyChanged
         _ => ""
     };
 
-    public string Discipline => RevokedAt != null ? "Thu bài " + RevokedAt : WarnedAt != null ? "⚑ Nhắc " + WarnedAt : "—";
+    public string Discipline => (RevokedAt != null ? "Thu bài " + RevokedAt : WarnedAt != null ? "⚑ Nhắc " + WarnedAt : "—")
+                                + (CheatCount > 0 ? $"  ⚠{CheatCount}" : "");
 
     private static Brush B(byte r, byte g, byte b) { var x = new SolidColorBrush(Color.FromRgb(r, g, b)); x.Freeze(); return x; }
     private static readonly Brush SDoing = B(0x25, 0x63, 0xEB), SDone = B(0x16, 0xA3, 0x4A), SLost = B(0xDC, 0x26, 0x26),

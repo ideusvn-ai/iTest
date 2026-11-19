@@ -34,6 +34,13 @@ public partial class MainWindow : Window
     private bool _registered;
     private readonly Dictionary<int, int> _choices = new();
     private readonly Dictionary<int, string> _essays = new();
+    private readonly Dictionary<int, HashSet<int>> _multi = new();
+    private readonly Dictionary<int, Dictionary<int, bool>> _tf = new();
+    private readonly Dictionary<int, string> _short = new();
+    private readonly HashSet<int> _dirtyShort = new();
+    private readonly Dictionary<int, QuestionType> _types = new();
+    private readonly Dictionary<int, List<(Border yes, Border no)>> _tfMarks = new();
+    private readonly Dictionary<int, TextBlock> _summaries = new();
     private readonly Dictionary<int, FrameworkElement> _cards = new();
     private readonly Dictionary<int, List<Border>> _optionCircles = new();
     private readonly Dictionary<int, List<Border>> _bubbles = new();
@@ -41,6 +48,8 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer _essayFlush = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly DispatcherTimer _heartbeat = new() { Interval = TimeSpan.FromSeconds(3) };
+    private readonly DispatcherTimer _cheatTimer = new() { Interval = TimeSpan.FromSeconds(8) };
+    private readonly HashSet<string> _reported = new();
     private readonly DispatcherTimer _saveDebounce = new() { Interval = TimeSpan.FromSeconds(1) };
     private DateTime _lastRx = DateTime.Now;
     private static readonly Brush TimerNormal = Frozen(0x0F, 0x17, 0x2A), TimerLow = Frozen(0xB9, 0x1C, 0x1C), Ink = Frozen(0x1E, 0x3A, 0x8A);
@@ -74,6 +83,7 @@ public partial class MainWindow : Window
         StartWave();
 
         _clock.Tick += (_, _) => OnClock();
+        _cheatTimer.Tick += (_, _) => CheatScan();
         _essayFlush.Tick += (_, _) => FlushEssays();
         _saveDebounce.Tick += (_, _) => { _saveDebounce.Stop(); SaveLocalNow(); };
         _heartbeat.Tick += (_, _) =>
@@ -231,6 +241,13 @@ public partial class MainWindow : Window
                 var es = m.As<Dictionary<int, string>>("essays");
                 if (ch != null) foreach (var (k, v) in ch) _choices[k] = v;
                 if (es != null) foreach (var (k, v) in es) _essays[k] = v;
+                var mu = m.As<Dictionary<int, List<int>>>("multi");
+                var tfr = m.As<Dictionary<int, Dictionary<int, bool>>>("tf");
+                var sh = m.As<Dictionary<int, string>>("shortAns");
+                if (mu != null) foreach (var (k, v) in mu) _multi[k] = v.ToHashSet();
+                if (tfr != null) foreach (var (k, v) in tfr) _tf[k] = v;
+                if (sh != null) foreach (var (k, v) in sh) _short[k] = v;
+                if (_exam != null && (mu?.Count > 0 || tfr?.Count > 0 || sh?.Count > 0)) BuildPaper();
                 RefreshAnswers();
                 break;
             case Msg.Time:
@@ -291,6 +308,7 @@ public partial class MainWindow : Window
                 c.Send(Msg.Register, _info);
                 foreach (var (k, v) in _choices) c.Send(Msg.Answer, new { no = k, choice = v });
                 foreach (var (k, v) in _essays) c.Send(Msg.Essay, new { no = k, text = v });
+                ResendExtra(c);
                 OfflineBar.Visibility = Visibility.Collapsed;
                 return;
             }
@@ -322,6 +340,12 @@ public partial class MainWindow : Window
             Topmost = true;
             KioskGuard.Enter();
             _clock.Start();
+            AntiCheat.ProtectWindow(this);
+            AntiCheat.ClearClipboard();
+            var vm = AntiCheat.VirtualMachine();
+            if (vm != null) ReportCheat("vm", "máy thí sinh là máy ảo (" + vm + ")");
+            CheatScan();
+            _cheatTimer.Start();
             _essayFlush.Start();
         }
         UpdateClock();
@@ -364,16 +388,23 @@ public partial class MainWindow : Window
         PaperHost.Children.Add(new Border { Height = 1, Background = Brushes.Black, Margin = new Thickness(0, 10, 0, 18) });
 
         bool twoParts = _exam.McCount > 0 && _exam.EssayCount > 0;
-        var mcs = _exam.Questions.Where(q => q.Type == QuestionType.MultipleChoice).ToList();
+        var mcs = _exam.Questions.Where(q => q.Type.IsObjective()).ToList();
         var ess = _exam.Questions.Where(q => q.Type == QuestionType.Essay).ToList();
+        _types.Clear(); _tfMarks.Clear(); _summaries.Clear();
+        foreach (var q in _exam.Questions) _types[q.No] = q.Type;
         if (mcs.Count > 0)
         {
             if (twoParts)
             {
                 PaperHost.Children.Add(new TextBlock { Text = $"PHẦN I. TRẮC NGHIỆM ({Fmt(_exam.McTotal)} điểm)", FontWeight = FontWeights.Bold });
-                PaperHost.Children.Add(new TextBlock { Text = "Mỗi câu hỏi chỉ chọn một phương án.", FontStyle = FontStyles.Italic, Margin = new Thickness(0, 2, 0, 12) });
+                PaperHost.Children.Add(new TextBlock
+                {
+                    Text = mcs.All(q => q.Type == QuestionType.MultipleChoice) ? "Mỗi câu hỏi chỉ chọn một phương án."
+                         : "Đọc kỹ yêu cầu từng câu: chọn một phương án, chọn nhiều phương án, chọn Đúng/Sai từng ý hoặc điền câu trả lời ngắn.",
+                    FontStyle = FontStyles.Italic, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 12)
+                });
             }
-            foreach (var q in mcs) PaperHost.Children.Add(BuildMcCard(q));
+            foreach (var q in mcs) PaperHost.Children.Add(BuildObjectiveCard(q));
         }
         if (ess.Count > 0)
         {
@@ -401,35 +432,139 @@ public partial class MainWindow : Window
 
     private static string Fmt(double v) => Math.Round(v, 2).ToString("0.##", System.Globalization.CultureInfo.GetCultureInfo("vi-VN"));
 
-    private FrameworkElement BuildMcCard(ClientQuestion q)
+    private static readonly Brush TfOn = Frozen(0x1E, 0x3A, 0x8A), TfOff = Frozen(0xCB, 0xD5, 0xE1);
+
+    private FrameworkElement BuildObjectiveCard(ClientQuestion q)
     {
         var card = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
         var tb = new TextBlock { TextWrapping = TextWrapping.Wrap };
         tb.Inlines.Add(new System.Windows.Documents.Run($"Câu {q.No}. ") { FontWeight = FontWeights.Bold });
-        tb.Inlines.Add(new System.Windows.Documents.Run(q.Text));
+        RichMath.AddTo(tb.Inlines, q.Text, 17);
+        if (q.Type == QuestionType.MultiSelect)
+            tb.Inlines.Add(new System.Windows.Documents.Run("  (Chọn tất cả phương án đúng)") { FontStyle = FontStyles.Italic, Foreground = Brushes.DimGray });
         card.Children.Add(tb);
         AddMedia(card, q);
-        bool shortOpts = q.Options.All(o => o.Length <= 16);
-        var grid = new UniformGrid { Columns = shortOpts ? 4 : 2, Margin = new Thickness(30, 6, 0, 0) };
-        var circles = new List<Border>();
-        for (int k = 0; k < q.Options.Count; k++)
+        int no = q.No;
+
+        if (q.Type == QuestionType.TrueFalse)
         {
-            int choice = k;
-            var circle = new Border { Width = 30, Height = 30, CornerRadius = new CornerRadius(15), BorderThickness = new Thickness(2), BorderBrush = Brushes.Transparent };
-            circle.Child = new TextBlock { Text = ((char)('A' + k)).ToString(), FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-            var row = new StackPanel { Orientation = Orientation.Horizontal };
-            row.Children.Add(circle);
-            row.Children.Add(new TextBlock { Text = q.Options[k], TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
-            var btn = new Button { Content = row, Background = Brushes.Transparent, BorderThickness = new Thickness(0), HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(4), MinHeight = 36, HorizontalContentAlignment = HorizontalAlignment.Left };
-            btn.Click += (_, _) => Choose(q.No, choice);
-            circles.Add(circle);
-            grid.Children.Add(btn);
+            var marks = new List<(Border, Border)>();
+            var grid = new Grid { Margin = new Thickness(30, 8, 0, 0) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition());
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            for (int k = 0; k < q.Options.Count; k++)
+            {
+                int idx = k;
+                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                var st = new TextBlock { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 4, 12, 4) };
+                st.Inlines.Add(new System.Windows.Documents.Run($"{(char)('a' + k)}) ") { FontWeight = FontWeights.Bold });
+                RichMath.AddTo(st.Inlines, q.Options[k], 17);
+                Grid.SetRow(st, k);
+                grid.Children.Add(st);
+                var pair = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                Border Mark(string text, bool val)
+                {
+                    var b = new Border { CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1.5), BorderBrush = TfOff, Padding = new Thickness(12, 3, 12, 3), Background = Brushes.White };
+                    b.Child = new TextBlock { Text = text, FontWeight = FontWeights.SemiBold, FontFamily = new FontFamily("Segoe UI"), FontSize = 14 };
+                    var btn = new Button { Content = b, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(2), MinHeight = 32 };
+                    btn.Click += (_, _) => ChooseTf(no, idx, val);
+                    pair.Children.Add(btn);
+                    return b;
+                }
+                var yes = Mark("Đúng", true); var noB = Mark("Sai", false);
+                marks.Add((yes, noB));
+                Grid.SetRow(pair, k); Grid.SetColumn(pair, 1);
+                grid.Children.Add(pair);
+            }
+            _tfMarks[no] = marks;
+            card.Children.Add(grid);
         }
-        _optionCircles[q.No] = circles;
-        card.Children.Add(grid);
-        _cards[q.No] = card;
+        else if (q.Type == QuestionType.ShortAnswer)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(30, 8, 0, 0) };
+            row.Children.Add(new TextBlock { Text = "Trả lời: ", FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center });
+            var box = new TextBox
+            {
+                Width = 260, FontFamily = new FontFamily("Times New Roman"), FontSize = 17, Foreground = Ink,
+                Text = _short.TryGetValue(no, out var sv) ? sv : ""
+            };
+            VietInput.Attach(box);
+            box.TextChanged += (_, _) => { if (_submitted) return; _short[no] = box.Text; _dirtyShort.Add(no); RefreshAnswers(); SaveLocal(); };
+            box.LostKeyboardFocus += (_, _) => FlushEssays();
+            row.Children.Add(box);
+            card.Children.Add(row);
+        }
+        else
+        {
+            bool multi = q.Type == QuestionType.MultiSelect;
+            bool shortOpts = q.Options.All(o => o.Length <= 16 && !RichMath.HasMath(o));
+            var grid = new UniformGrid { Columns = shortOpts ? 4 : 2, Margin = new Thickness(30, 6, 0, 0) };
+            var circles = new List<Border>();
+            for (int k = 0; k < q.Options.Count; k++)
+            {
+                int choice = k;
+                var circle = new Border { Width = 30, Height = 30, CornerRadius = new CornerRadius(multi ? 5 : 15), BorderThickness = new Thickness(2), BorderBrush = multi ? TfOff : Brushes.Transparent };
+                circle.Child = new TextBlock { Text = ((char)('A' + k)).ToString(), FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+                var row = new StackPanel { Orientation = Orientation.Horizontal };
+                row.Children.Add(circle);
+                var ot = new TextBlock { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
+                RichMath.AddTo(ot.Inlines, q.Options[k], 17);
+                row.Children.Add(ot);
+                var btn = new Button { Content = row, Background = Brushes.Transparent, BorderThickness = new Thickness(0), HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(4), MinHeight = 36, HorizontalContentAlignment = HorizontalAlignment.Left };
+                btn.Click += (_, _) => { if (multi) ToggleMulti(no, choice); else Choose(no, choice); };
+                circles.Add(circle);
+                grid.Children.Add(btn);
+            }
+            _optionCircles[no] = circles;
+            card.Children.Add(grid);
+        }
+        _cards[no] = card;
         return card;
     }
+
+    private void ToggleMulti(int no, int choice)
+    {
+        if (_submitted) return;
+        if (!_multi.TryGetValue(no, out var set)) _multi[no] = set = new HashSet<int>();
+        if (!set.Remove(choice)) set.Add(choice);
+        SendExtra(_conn, no);
+        RefreshAnswers();
+        SaveLocal();
+    }
+
+    private void ChooseTf(int no, int idx, bool val)
+    {
+        if (_submitted) return;
+        if (!_tf.TryGetValue(no, out var d)) _tf[no] = d = new Dictionary<int, bool>();
+        if (d.TryGetValue(idx, out var cur) && cur == val) d.Remove(idx); else d[idx] = val;
+        SendExtra(_conn, no);
+        RefreshAnswers();
+        SaveLocal();
+    }
+
+    /// <summary>Gửi câu trả lời của câu nhiều đáp án / Đúng-Sai / trả lời ngắn lên máy chủ.</summary>
+    private void SendExtra(Connection? c, int no)
+    {
+        if (c == null || !_types.TryGetValue(no, out var ty)) return;
+        var ax = new AnswerEx { No = no, Type = ty };
+        switch (ty)
+        {
+            case QuestionType.MultiSelect: ax.Choices = _multi.TryGetValue(no, out var s) ? s.OrderBy(x => x).ToList() : new(); break;
+            case QuestionType.TrueFalse: ax.Tf = _tf.TryGetValue(no, out var d) ? new Dictionary<int, bool>(d) : new(); break;
+            case QuestionType.ShortAnswer: ax.Text = _short.TryGetValue(no, out var v) ? v : ""; break;
+            default: return;
+        }
+        c.Send(Msg.AnswerEx, ax);
+    }
+
+    private void ResendExtra(Connection c)
+    {
+        foreach (var no in _multi.Keys.Concat(_tf.Keys).Concat(_short.Keys).Distinct().ToList()) SendExtra(c, no);
+    }
+
+    private int AnsweredCount() =>
+        _choices.Count + _multi.Count(kv => kv.Value.Count > 0) + _tf.Count(kv => kv.Value.Count > 0)
+        + _short.Count(kv => !string.IsNullOrWhiteSpace(kv.Value)) + _essays.Count(kv => !string.IsNullOrWhiteSpace(kv.Value));
 
     private FrameworkElement BuildEssayCard(ClientQuestion q)
     {
@@ -437,7 +572,7 @@ public partial class MainWindow : Window
         var tb = new TextBlock { TextWrapping = TextWrapping.Wrap };
         tb.Inlines.Add(new System.Windows.Documents.Run($"Câu {q.No} ") { FontWeight = FontWeights.Bold });
         tb.Inlines.Add(new System.Windows.Documents.Run($"({Fmt(q.Points)} điểm). ") { FontStyle = FontStyles.Italic });
-        tb.Inlines.Add(new System.Windows.Documents.Run(q.Text));
+        RichMath.AddTo(tb.Inlines, q.Text, 17);
         card.Children.Add(tb);
         AddMedia(card, q);
         var box = new TextBox
@@ -533,6 +668,21 @@ public partial class MainWindow : Window
     {
         foreach (var q in mcs)
         {
+            if (q.Type != QuestionType.MultipleChoice && q.Type != QuestionType.MultiSelect)
+            {
+                // Đúng/Sai và trả lời ngắn: hiện tóm tắt câu trả lời trên phiếu
+                var r2 = new DockPanel { Margin = new Thickness(0, 1, 0, 1) };
+                int n2 = q.No;
+                var nb = new Button { Content = q.No.ToString(), Width = 40, MinHeight = 28, Padding = new Thickness(0), FontWeight = FontWeights.Bold, Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
+                nb.Click += (_, _) => GoTo(n2);
+                DockPanel.SetDock(nb, Dock.Left);
+                r2.Children.Add(nb);
+                var sum = new TextBlock { VerticalAlignment = VerticalAlignment.Center, FontSize = 12, Foreground = Brushes.Gray, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(6, 0, 0, 0) };
+                r2.Children.Add(sum);
+                _summaries[q.No] = sum;
+                SheetHost.Children.Add(r2);
+                continue;
+            }
             var row = new Grid { Margin = new Thickness(0, 1, 0, 1) };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });
             for (int i = 0; i < 4; i++) row.ColumnDefinitions.Add(new ColumnDefinition());
@@ -544,10 +694,11 @@ public partial class MainWindow : Window
             for (int k = 0; k < Math.Min(4, q.Options.Count); k++)
             {
                 int choice = k;
-                var bub = new Border { Width = 22, Height = 22, CornerRadius = new CornerRadius(11), BorderThickness = new Thickness(1.5), BorderBrush = Brushes.Gray, Background = Brushes.White };
+                var bub = new Border { Width = 22, Height = 22, CornerRadius = new CornerRadius(q.Type == QuestionType.MultiSelect ? 4 : 11), BorderThickness = new Thickness(1.5), BorderBrush = Brushes.Gray, Background = Brushes.White };
                 bub.Child = new TextBlock { Text = ((char)('A' + k)).ToString(), FontSize = 10, FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Foreground = Brushes.Gray };
                 var b = new Button { Content = bub, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0), MinHeight = 28 };
-                b.Click += (_, _) => Choose(no, choice);
+                bool isMulti = q.Type == QuestionType.MultiSelect;
+                b.Click += (_, _) => { if (isMulti) ToggleMulti(no, choice); else Choose(no, choice); };
                 Grid.SetColumn(b, k + 1);
                 row.Children.Add(b);
                 list.Add(bub);
@@ -594,17 +745,47 @@ public partial class MainWindow : Window
     private void RefreshAnswers()
     {
         var ink = Ink;
+        bool On(int no, int k) => _types.TryGetValue(no, out var ty) && ty == QuestionType.MultiSelect
+            ? _multi.TryGetValue(no, out var s) && s.Contains(k)
+            : _choices.TryGetValue(no, out var c) && c == k;
         foreach (var (no, circles) in _optionCircles)
+        {
+            bool multi = _types.TryGetValue(no, out var ty) && ty == QuestionType.MultiSelect;
             for (int k = 0; k < circles.Count; k++)
             {
-                bool on = _choices.TryGetValue(no, out var c) && c == k;
-                circles[k].BorderBrush = on ? ink : Brushes.Transparent;
-                ((TextBlock)circles[k].Child).Foreground = on ? ink : Brushes.Black;
+                bool on = On(no, k);
+                circles[k].BorderBrush = on ? ink : multi ? TfOff : Brushes.Transparent;
+                circles[k].Background = on && multi ? ink : Brushes.Transparent;
+                ((TextBlock)circles[k].Child).Foreground = on ? (multi ? Brushes.White : ink) : Brushes.Black;
             }
+        }
+        foreach (var (no, marks) in _tfMarks)
+            for (int k = 0; k < marks.Count; k++)
+            {
+                bool? v = _tf.TryGetValue(no, out var d) && d.TryGetValue(k, out var b) ? b : null;
+                Paint(marks[k].yes, v == true);
+                Paint(marks[k].no, v == false);
+            }
+        foreach (var (no, sum) in _summaries)
+        {
+            if (_types[no] == QuestionType.TrueFalse)
+            {
+                var d = _tf.TryGetValue(no, out var dd) ? dd : new Dictionary<int, bool>();
+                int n = _exam?.Questions.FirstOrDefault(x => x.No == no)?.Options.Count ?? 4;
+                sum.Text = string.Join("  ", Enumerable.Range(0, n).Select(i => $"{(char)('a' + i)}:" + (d.TryGetValue(i, out var b) ? (b ? "Đ" : "S") : "–")));
+                sum.Foreground = d.Count > 0 ? ink : Brushes.Gray;
+            }
+            else
+            {
+                var v = _short.TryGetValue(no, out var sv) ? sv : "";
+                sum.Text = string.IsNullOrWhiteSpace(v) ? "(chưa trả lời)" : v;
+                sum.Foreground = string.IsNullOrWhiteSpace(v) ? Brushes.Gray : ink;
+            }
+        }
         foreach (var (no, bubs) in _bubbles)
             for (int k = 0; k < bubs.Count; k++)
             {
-                bool on = _choices.TryGetValue(no, out var c) && c == k;
+                bool on = On(no, k);
                 bubs[k].Background = on ? ink : Brushes.White;
                 bubs[k].BorderBrush = on ? ink : Brushes.Gray;
                 ((TextBlock)bubs[k].Child).Foreground = on ? Brushes.White : Brushes.Gray;
@@ -612,10 +793,17 @@ public partial class MainWindow : Window
         UpdateProgress();
     }
 
+    private static void Paint(Border b, bool on)
+    {
+        b.Background = on ? TfOn : Brushes.White;
+        b.BorderBrush = on ? TfOn : TfOff;
+        ((TextBlock)b.Child).Foreground = on ? Brushes.White : Brushes.Black;
+    }
+
     private void UpdateProgress()
     {
         if (_exam == null) return;
-        int done = _choices.Count + _essays.Count(kv => !string.IsNullOrWhiteSpace(kv.Value));
+        int done = AnsweredCount();
         int total = _exam.Questions.Count;
         ProgressText.Text = $"Đã làm {done}/{total}";
         ProgressBar.Value = total == 0 ? 0 : (double)done / total;
@@ -623,7 +811,10 @@ public partial class MainWindow : Window
 
     private void FlushEssays()
     {
-        if (_conn == null || _dirtyEssays.Count == 0) return;
+        if (_conn == null) return;
+        foreach (var no in _dirtyShort.ToList()) SendExtra(_conn, no);
+        _dirtyShort.Clear();
+        if (_dirtyEssays.Count == 0) return;
         foreach (var no in _dirtyEssays.ToList())
             _conn.Send(Msg.Essay, new { no, text = _essays.TryGetValue(no, out var t) ? t : "" });
         _dirtyEssays.Clear();
@@ -649,7 +840,7 @@ public partial class MainWindow : Window
 
     private void Submit_Click(object sender, RoutedEventArgs e)
     {
-        int done = _choices.Count + _essays.Count(kv => !string.IsNullOrWhiteSpace(kv.Value));
+        int done = AnsweredCount();
         var r = MessageBox.Show(this, $"Bạn đã làm {done}/{_exam?.Questions.Count} câu. Sau khi nộp sẽ không sửa được bài.\n\nNộp bài ngay?", "Nộp bài", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (r == MessageBoxResult.Yes) DoSubmit(auto: false);
     }
@@ -732,6 +923,19 @@ public partial class MainWindow : Window
     }
 
     // ---- Chống thoát ----
+    private void CheatScan()
+    {
+        if (!_examRunning || _submitted) { _cheatTimer.Stop(); return; }
+        foreach (var f in AntiCheat.Scan(_exam?.AllowDocuments == true)) ReportCheat(f.Kind, f.Detail);
+    }
+
+    /// <summary>Báo dấu hiệu gian lận lên máy chủ (mỗi nội dung chỉ báo một lần).</summary>
+    private void ReportCheat(string kind, string detail)
+    {
+        if (!_reported.Add(detail)) return;
+        _conn?.Send(Msg.Cheat, new { kind, detail });
+    }
+
     private void OnDeactivated(object? sender, EventArgs e)
     {
         if (!_examRunning || _released) return;
@@ -774,7 +978,7 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_localSave)!);
-            File.WriteAllText(_localSave, JsonSerializer.Serialize(new { sbd = _info.Sbd, code = _exam?.Code, choices = _choices, essays = _essays }));
+            File.WriteAllText(_localSave, JsonSerializer.Serialize(new { sbd = _info.Sbd, code = _exam?.Code, choices = _choices, essays = _essays, multi = _multi, tf = _tf, shortAns = _short }));
         }
         catch { }
     }
@@ -790,6 +994,13 @@ public partial class MainWindow : Window
             var es = node.As<Dictionary<int, string>>("essays");
             if (ch != null) foreach (var (k, v) in ch) if (!_choices.ContainsKey(k)) { _choices[k] = v; _conn?.Send(Msg.Answer, new { no = k, choice = v }); }
             if (es != null) foreach (var (k, v) in es) if (!_essays.ContainsKey(k)) { _essays[k] = v; _dirtyEssays.Add(k); }
+            var mu = node.As<Dictionary<int, List<int>>>("multi");
+            var tf = node.As<Dictionary<int, Dictionary<int, bool>>>("tf");
+            var sh = node.As<Dictionary<int, string>>("shortAns");
+            if (mu != null) foreach (var (k, v) in mu) if (!_multi.ContainsKey(k)) { _multi[k] = v.ToHashSet(); }
+            if (tf != null) foreach (var (k, v) in tf) if (!_tf.ContainsKey(k)) { _tf[k] = v; }
+            if (sh != null) foreach (var (k, v) in sh) if (!_short.ContainsKey(k)) { _short[k] = v; _dirtyShort.Add(k); }
+            foreach (var k in _multi.Keys.Concat(_tf.Keys)) _dirtyShort.Add(k);
         }
         catch { }
     }

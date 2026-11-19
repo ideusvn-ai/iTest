@@ -34,6 +34,129 @@ public partial class MainWindow : Window
         foreach (var f in Filters) FilterBox.Items.Add(new ComboBoxItem { Content = f.label, Tag = f.key });
         FilterBox.SelectedIndex = 0;
         Closing += OnClosing;
+        SetupPanel.Visibility = Visibility.Collapsed;
+        ShowLogin();
+    }
+
+    // ================== Mật khẩu quản trị ==================
+    private int _loginFails;
+    private DateTime _lockUntil;
+
+    private void ShowLogin()
+    {
+        bool first = !AdminAuth.IsSet;
+        LoginTitle.Text = first ? "Tạo mật khẩu quản trị" : "Đăng nhập quản trị";
+        LoginHint.Text = first
+            ? $"Lần đầu sử dụng trên máy này: đặt mật khẩu quản trị (ít nhất {AdminAuth.MinLength} ký tự). Mỗi lần mở iTest-Server cần nhập mật khẩu này, để thí sinh không tự mở được bảng điều khiển."
+            : "Nhập mật khẩu quản trị để mở bảng điều khiển phòng thi.";
+        LoginConfirmRow.Visibility = first ? Visibility.Visible : Visibility.Collapsed;
+        LoginBtn.Content = first ? "Lưu mật khẩu và tiếp tục" : "Đăng nhập";
+        LoginPanel.Visibility = Visibility.Visible;
+        Loaded += (_, _) => LoginPass.Focus();
+    }
+
+    private void LoginPass_KeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) Login_Click(sender, e); }
+
+    private void Login_Click(object sender, RoutedEventArgs e)
+    {
+        LoginError.Text = "";
+        if (!AdminAuth.IsSet)
+        {
+            if (LoginPass.Password.Length < AdminAuth.MinLength) { LoginError.Text = $"Mật khẩu cần ít nhất {AdminAuth.MinLength} ký tự."; return; }
+            if (LoginPass.Password != LoginPass2.Password) { LoginError.Text = "Hai lần nhập mật khẩu không khớp."; return; }
+            try { AdminAuth.Set(LoginPass.Password); }
+            catch (Exception ex) { LoginError.Text = "Không lưu được mật khẩu: " + ex.Message; return; }
+        }
+        else
+        {
+            if (DateTime.Now < _lockUntil) { LoginError.Text = $"Nhập sai nhiều lần. Thử lại sau {(int)(_lockUntil - DateTime.Now).TotalSeconds + 1} giây."; return; }
+            if (!AdminAuth.Verify(LoginPass.Password))
+            {
+                _loginFails++;
+                LoginPass.Clear();
+                if (_loginFails >= 5) { _lockUntil = DateTime.Now.AddSeconds(30 * (_loginFails - 4)); LoginError.Text = "Sai mật khẩu. Tạm khoá đăng nhập 30 giây."; }
+                else LoginError.Text = $"Sai mật khẩu (lần {_loginFails}/5).";
+                return;
+            }
+        }
+        LoginPass.Clear(); LoginPass2.Clear();
+        LoginPanel.Visibility = Visibility.Collapsed;
+        Anim.Show(SetupPanel);
+        CheckRecovery();
+    }
+
+    private void LoginQuit_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void ChangePass_Click(object sender, RoutedEventArgs e)
+    {
+        var old = Prompt.Show(this, "Đổi mật khẩu quản trị", "Mật khẩu hiện tại:", "", password: true);
+        if (old == null) return;
+        if (!AdminAuth.Verify(old)) { MessageBox.Show(this, "Mật khẩu hiện tại không đúng.", "Đổi mật khẩu", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+        var n1 = Prompt.Show(this, "Đổi mật khẩu quản trị", $"Mật khẩu mới (ít nhất {AdminAuth.MinLength} ký tự):", "", password: true);
+        if (n1 == null) return;
+        var n2 = Prompt.Show(this, "Đổi mật khẩu quản trị", "Nhập lại mật khẩu mới:", "", password: true);
+        if (n2 == null) return;
+        if (n1 != n2) { MessageBox.Show(this, "Hai lần nhập không khớp.", "Đổi mật khẩu", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+        try { AdminAuth.Set(n1); MessageBox.Show(this, "Đã đổi mật khẩu quản trị.", "Đổi mật khẩu", MessageBoxButton.OK, MessageBoxImage.Information); }
+        catch (Exception ex) { MessageBox.Show(this, ex.Message, "Đổi mật khẩu", MessageBoxButton.OK, MessageBoxImage.Warning); }
+    }
+
+    // ================== Khôi phục sau sự cố ==================
+    private RoomState? _recover;
+
+    private void CheckRecovery()
+    {
+        _recover = RoomService.FindUnclosed();
+        if (_recover == null) { RecoverBox.Visibility = Visibility.Collapsed; return; }
+        RecoverText.Text = $"{_recover.Title}.\nBộ đề: {Path.GetFileName(_recover.PackagePath)}. Khôi phục để các máy thí sinh tự kết nối lại và làm tiếp từ bài đã lưu.";
+        Anim.Show(RecoverBox);
+    }
+
+    private void DismissRecover_Click(object sender, RoutedEventArgs e)
+    {
+        if (_recover == null) return;
+        if (MessageBox.Show(this, "Bỏ qua phòng thi này? Bản sao lưu bài làm vẫn được giữ trong thư mục:\n" + _recover.BackupDir,
+                "Khôi phục", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        RoomService.Dismiss(_recover);
+        _recover = null;
+        RecoverBox.Visibility = Visibility.Collapsed;
+    }
+
+    private void Recover_Click(object sender, RoutedEventArgs e)
+    {
+        if (_recover == null) return;
+        var st = _recover;
+        if (!File.Exists(st.PackagePath))
+        {
+            MessageBox.Show(this, "Không tìm thấy file bộ đề:\n" + st.PackagePath + "\n\nHãy chọn lại đúng file bộ đề đã dùng.", "Khôi phục", MessageBoxButton.OK, MessageBoxImage.Warning);
+            var dlg = new OpenFileDialog { Filter = "Bộ đề iTest (*.itz)|*.itz" };
+            if (dlg.ShowDialog(this) != true) return;
+            st.PackagePath = dlg.FileName;
+        }
+        ExamPackage.Content pkg;
+        try
+        {
+            string? pw = null;
+            if (ExamPackage.IsPasswordProtected(st.PackagePath))
+            {
+                pw = Prompt.Show(this, "Khôi phục phòng thi", "Nhập mật khẩu bộ đề " + Path.GetFileName(st.PackagePath) + ":", "", password: true);
+                if (pw == null) return;
+            }
+            pkg = ExamPackage.Load(st.PackagePath, pw);
+        }
+        catch (CryptographicException) { MessageBox.Show(this, "Sai mật khẩu bộ đề.", "Khôi phục", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+        catch (Exception ex) { MessageBox.Show(this, "Không mở được bộ đề: " + ex.Message, "Khôi phục", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+
+        _room = new RoomService(Dispatcher);
+        _room.LoadPackage(pkg, st.PackagePath);
+        try { _room.Restore(st); }
+        catch (Exception ex) { MessageBox.Show(this, "Không mở được cổng mạng: " + ex.Message, "Khôi phục"); _room.Dispose(); _room = null; return; }
+        _pkg = pkg; _pkgPath = st.PackagePath;
+        _recover = null;
+        RecoverBox.Visibility = Visibility.Collapsed;
+        foreach (ComboBoxItem it in WindowBox.Items) if (it.Tag?.ToString() == _room.SubmitWindowMinutes.ToString()) WindowBox.SelectedItem = it;
+        ShowScoreBox.IsChecked = _room.ShowScore;
+        EnterRoom();
     }
 
     // ================== Thiết lập ==================
@@ -135,6 +258,12 @@ public partial class MainWindow : Window
         _room.ShowScore = ShowScoreBox.IsChecked == true;
         try { _room.Open(); }
         catch (Exception ex) { SetupError.Text = "Không mở được cổng mạng (có thể đang có iTest-Server khác chạy): " + ex.Message; _room.Dispose(); _room = null; return; }
+        EnterRoom();
+    }
+
+    private void EnterRoom()
+    {
+        if (_room == null) return;
         _room.Changed += ScheduleRefresh;
         _view = CollectionViewSource.GetDefaultView(_room.Candidates);
         _view.Filter = FilterCandidate;
@@ -209,6 +338,7 @@ public partial class MainWindow : Window
         BackupLine.Text = r.Phase == Phase.Collected ? "Đã sao lưu bài làm" : $"Sao lưu tự động sau {30 - r.TickCount % 30} giây · {r.BackupDir}";
         BackupBar.Value = r.TickCount % 30;
         ExportBtn.IsEnabled = r.Phase == Phase.Collected;
+        SchoolExportBtn.IsEnabled = r.Phase == Phase.Collected;
         ExportBtn.Content = r.Exported ? "✓ Đã xuất · Xuất lại" : "⬇  Xuất kết quả";
         ExportHint.Text = r.Phase == Phase.Collected
             ? "Gói .zip gồm: bảng điểm và phân tích đề (Excel), bài tự luận đánh phách (PDF), biên bản phòng thi có chỗ ký (PDF), toàn bộ bài làm và nhật ký."
@@ -415,6 +545,12 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) { MessageBox.Show(this, "Lỗi khi xuất kết quả: " + ex.Message, "Xuất kết quả", MessageBoxButton.OK, MessageBoxImage.Error); }
         finally { Mouse.OverrideCursor = null; Refresh(); }
+    }
+
+    private void SchoolExport_Click(object sender, RoutedEventArgs e)
+    {
+        if (_room == null || _room.Phase != Phase.Collected) return;
+        SchoolExport.Run(this, _room);
     }
 
     private void CloseRoom_Click(object sender, RoutedEventArgs e)

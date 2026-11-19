@@ -13,6 +13,10 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "iTest.Server", "src\iTest.S
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "iTest.Editor", "src\iTest.Editor\iTest.Editor.csproj", "{3ECCA178-0B0E-5652-9952-24099DAE5AC4}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "iTest.Core.Tests", "tests\iTest.Core.Tests\iTest.Core.Tests.csproj", "{7C1D2E4A-5B6F-4A1B-9C3D-1E2F3A4B5C6D}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "iTest.LoadTest", "tools\iTest.LoadTest\iTest.LoadTest.csproj", "{8D2E3F5B-6C7A-4B2C-AD4E-2F3A4B5C6D7E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -39,5 +43,13 @@ Global
 		{3ECCA178-0B0E-5652-9952-24099DAE5AC4}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3ECCA178-0B0E-5652-9952-24099DAE5AC4}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{3ECCA178-0B0E-5652-9952-24099DAE5AC4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7C1D2E4A-5B6F-4A1B-9C3D-1E2F3A4B5C6D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7C1D2E4A-5B6F-4A1B-9C3D-1E2F3A4B5C6D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7C1D2E4A-5B6F-4A1B-9C3D-1E2F3A4B5C6D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7C1D2E4A-5B6F-4A1B-9C3D-1E2F3A4B5C6D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8D2E3F5B-6C7A-4B2C-AD4E-2F3A4B5C6D7E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8D2E3F5B-6C7A-4B2C-AD4E-2F3A4B5C6D7E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8D2E3F5B-6C7A-4B2C-AD4E-2F3A4B5C6D7E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8D2E3F5B-6C7A-4B2C-AD4E-2F3A4B5C6D7E}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

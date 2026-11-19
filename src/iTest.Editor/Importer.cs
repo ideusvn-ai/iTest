@@ -16,6 +16,9 @@ public sealed class ImportedQuestion
     public string Text { get; set; } = "";
     public List<string> Options { get; } = new();
     public int Correct { get; set; } = -1;
+    public List<int> Corrects { get; } = new();
+    public List<bool?> TfKey { get; } = new();
+    public string ShortKey { get; set; } = "";
     public double? Points { get; set; }
     public byte[]? Image { get; set; }
     public string ImageExt { get; set; } = ".png";
@@ -25,7 +28,9 @@ public sealed class ImportedQuestion
 /// Nhập thông minh:
 ///  • Word: dòng bắt đầu "Câu n." / "Câu n:" là câu hỏi; "A." "B." "C." "D." là phương án (có thể nhiều phương án trên một dòng);
 ///    đáp án đúng được gạch chân, tô đỏ hoặc có dấu * phía trước; dòng có "TỰ LUẬN" chuyển sang phần tự luận; ảnh trong đoạn được giữ lại.
-///  • Excel: hàng 1 là tiêu đề; các cột: Loại (TN/TL) | Nội dung | A | B | C | D | Đáp án | Điểm.
+///  • Excel: hàng 1 là tiêu đề; các cột: Loại | Nội dung | A | B | C | D | Đáp án | Điểm.
+///    Loại: TN (1 đáp án) · NDA (nhiều đáp án, Đáp án "A,C") · DS (Đúng/Sai, cột A–D là các ý, Đáp án "Đ,S,Đ,S")
+///          · TLN (trả lời ngắn, Đáp án là giá trị đúng) · TL (tự luận, Đáp án là hướng dẫn chấm).
 /// </summary>
 public static class Importer
 {
@@ -131,14 +136,36 @@ public static class Importer
         foreach (var row in used.RowsUsed().Skip(1))
         {
             string C(int i) => row.Cell(i).GetFormattedString().Trim();
-            var type = C(1).ToUpperInvariant();
-            var q = new ImportedQuestion { Type = type.StartsWith("TL") || type.Contains("TỰ") ? QuestionType.Essay : QuestionType.MultipleChoice, Text = C(2) };
+            var type = C(1).ToUpperInvariant().Replace(" ", "");
+            var q = new ImportedQuestion { Type = ParseType(type), Text = C(2) };
             if (q.Text.Length == 0) continue;
-            if (q.Type == QuestionType.MultipleChoice)
+            var ans = C(7);
+            switch (q.Type)
             {
-                for (int i = 3; i <= 6; i++) q.Options.Add(C(i));
-                var ans = C(7).ToUpperInvariant();
-                if (ans.Length == 1 && ans[0] >= 'A' && ans[0] <= 'D') q.Correct = ans[0] - 'A';
+                case QuestionType.MultipleChoice:
+                    for (int i = 3; i <= 6; i++) q.Options.Add(C(i));
+                    var a1 = ans.ToUpperInvariant();
+                    if (a1.Length == 1 && a1[0] >= 'A' && a1[0] <= 'D') q.Correct = a1[0] - 'A';
+                    break;
+                case QuestionType.MultiSelect:
+                    for (int i = 3; i <= 6; i++) q.Options.Add(C(i));
+                    foreach (var ch in ans.ToUpperInvariant()) if (ch >= 'A' && ch <= 'D' && !q.Corrects.Contains(ch - 'A')) q.Corrects.Add(ch - 'A');
+                    break;
+                case QuestionType.TrueFalse:
+                    for (int i = 3; i <= 6; i++) q.Options.Add(C(i));
+                    var parts = ans.Split(new[] { ',', ';', ' ', '-' }, StringSplitOptions.RemoveEmptyEntries);
+                    for (int i = 0; i < 4; i++)
+                    {
+                        var s = i < parts.Length ? parts[i].Trim().ToUpperInvariant() : "";
+                        q.TfKey.Add(s is "Đ" or "D" or "ĐÚNG" or "DUNG" or "T" or "TRUE" or "1" ? true : s is "S" or "SAI" or "F" or "FALSE" or "0" ? false : null);
+                    }
+                    break;
+                case QuestionType.ShortAnswer:
+                    q.ShortKey = ans;
+                    break;
+                case QuestionType.Essay:
+                    q.ShortKey = ans; // dùng làm hướng dẫn chấm
+                    break;
             }
             if (double.TryParse(C(8).Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var pv)) q.Points = pv;
             list.Add(q);
@@ -146,17 +173,32 @@ public static class Importer
         return list;
     }
 
+    private static QuestionType ParseType(string t) => t switch
+    {
+        "NDA" or "NHIEU" or "NHIỀU" or "NHIEUDAPAN" or "NHIỀUĐÁPÁN" => QuestionType.MultiSelect,
+        "DS" or "ĐS" or "DUNGSAI" or "ĐÚNGSAI" or "Đ/S" or "D/S" => QuestionType.TrueFalse,
+        "TLN" or "TRALOINGAN" or "TRẢLỜINGẮN" => QuestionType.ShortAnswer,
+        _ when t.StartsWith("TL") || t.Contains("TỰ") => QuestionType.Essay,
+        _ => QuestionType.MultipleChoice
+    };
+
     /// <summary>Tạo file Excel mẫu để giáo viên điền câu hỏi.</summary>
     public static void WriteExcelTemplate(string path)
     {
         using var wb = new XLWorkbook();
         var ws = wb.Worksheets.Add("Câu hỏi");
-        string[] h = { "Loại (TN/TL)", "Nội dung", "A", "B", "C", "D", "Đáp án", "Điểm" };
+        string[] h = { "Loại (TN/NDA/DS/TLN/TL)", "Nội dung", "A", "B", "C", "D", "Đáp án", "Điểm" };
         for (int i = 0; i < h.Length; i++) ws.Cell(1, i + 1).Value = h[i];
         ws.Range(1, 1, 1, h.Length).Style.Font.SetBold().Fill.SetBackgroundColor(XLColor.FromHtml("#CCFBF1"));
         ws.Cell(2, 1).Value = "TN"; ws.Cell(2, 2).Value = "Tập xác định của hàm số y = √(x − 2) là";
         ws.Cell(2, 3).Value = "[2; +∞)"; ws.Cell(2, 4).Value = "(2; +∞)"; ws.Cell(2, 5).Value = "ℝ"; ws.Cell(2, 6).Value = "(−∞; 2]"; ws.Cell(2, 7).Value = "A"; ws.Cell(2, 8).Value = 0.25;
-        ws.Cell(3, 1).Value = "TL"; ws.Cell(3, 2).Value = "Giải phương trình x² − 5x + 6 = 0."; ws.Cell(3, 8).Value = 1;
+        ws.Cell(3, 1).Value = "NDA"; ws.Cell(3, 2).Value = "Những số nào sau đây là số nguyên tố?";
+        ws.Cell(3, 3).Value = "2"; ws.Cell(3, 4).Value = "9"; ws.Cell(3, 5).Value = "11"; ws.Cell(3, 6).Value = "15"; ws.Cell(3, 7).Value = "A,C"; ws.Cell(3, 8).Value = 0.5;
+        ws.Cell(4, 1).Value = "DS"; ws.Cell(4, 2).Value = "Cho hàm số $y = x^2 - 4x + 3$. Xét tính đúng sai của các mệnh đề:";
+        ws.Cell(4, 3).Value = "Đồ thị cắt trục tung tại điểm (0; 3)"; ws.Cell(4, 4).Value = "Hàm số đồng biến trên ℝ";
+        ws.Cell(4, 5).Value = "Đỉnh parabol là I(2; −1)"; ws.Cell(4, 6).Value = "Phương trình y = 0 vô nghiệm"; ws.Cell(4, 7).Value = "Đ,S,Đ,S"; ws.Cell(4, 8).Value = 1;
+        ws.Cell(5, 1).Value = "TLN"; ws.Cell(5, 2).Value = "Tính giá trị của $\\frac{1}{2} + \\frac{1}{4}$ (viết dạng số thập phân)."; ws.Cell(5, 7).Value = "0,75; 3/4"; ws.Cell(5, 8).Value = 0.5;
+        ws.Cell(6, 1).Value = "TL"; ws.Cell(6, 2).Value = "Giải phương trình $x^2 - 5x + 6 = 0$."; ws.Cell(6, 7).Value = "Δ = 1; x = 2 hoặc x = 3"; ws.Cell(6, 8).Value = 1;
         ws.Columns().AdjustToContents();
         ws.Column(2).Width = 60;
         wb.SaveAs(path);

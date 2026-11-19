@@ -12,6 +12,45 @@ namespace ITest.Server;
 
 public enum Phase { Open, Running, Collected }
 
+/// <summary>Ảnh chụp trạng thái phòng thi, ghi ra đĩa vài giây một lần để khôi phục khi máy chủ gặp sự cố.</summary>
+public sealed class RoomState
+{
+    public string Department { get; set; } = "";
+    public string School { get; set; } = "";
+    public string Room { get; set; } = "";
+    public string Proctor { get; set; } = "";
+    public string PackagePath { get; set; } = "";
+    public string BackupDir { get; set; } = "";
+    public Phase Phase { get; set; }
+    public int SecondsLeft { get; set; }
+    public int SubmitWindowMinutes { get; set; }
+    public bool ShowScore { get; set; }
+    public DateTime? StartedAt { get; set; }
+    public DateTime? EndedAt { get; set; }
+    public bool Exported { get; set; }
+    public bool Closed { get; set; }
+    public DateTime SavedAt { get; set; }
+    public List<CandidateState> Candidates { get; set; } = new();
+
+    public string Title => $"{Room} · lưu lúc {SavedAt:HH:mm:ss dd/MM} · {Candidates.Count} thí sinh · " +
+                           (Phase == Phase.Running ? "đang thi" : Phase == Phase.Collected ? "đã thu bài, chưa đóng phòng" : "chưa phát đề");
+}
+
+public sealed class CandidateState
+{
+    public AnswerSheet Sheet { get; set; } = new();
+    public CandStatus Status { get; set; }
+    public int Index { get; set; }
+    public int ExtraSeconds { get; set; }
+    public string? WarnedAt { get; set; }
+    public string? RevokedAt { get; set; }
+    public bool MoveApproved { get; set; }
+    public int TotalQuestions { get; set; }
+    public int CheatCount { get; set; }
+    public string Machine { get; set; } = "";
+    public string Ip { get; set; } = "";
+}
+
 /// <summary>Toàn bộ logic phòng thi: kết nối, phát đề, tính giờ, thu bài, sao lưu.</summary>
 public sealed class RoomService : IDisposable
 {
@@ -64,12 +103,11 @@ public sealed class RoomService : IDisposable
     }
 
     // ---------------- Mở / đóng phòng ----------------
-    public void Open()
+    public void Open(string? existingBackupDir = null)
     {
         Phase = Phase.Open;
         SecondsLeft = Exam.Minutes * 60;
-        BackupDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "iTest-Server", "SaoLuu",
-            $"{Safe(Room)}_{DateTime.Now:yyyyMMdd_HHmm}");
+        BackupDir = existingBackupDir ?? Path.Combine(BackupRoot, $"{Safe(Room)}_{DateTime.Now:yyyyMMdd_HHmm}");
         Directory.CreateDirectory(BackupDir);
         _listener = new TcpListener(IPAddress.Any, Ports.Session);
         _listener.Start();
@@ -82,11 +120,12 @@ public sealed class RoomService : IDisposable
         });
         _beacon.Start();
         _tick.Start();
-        Log("THÔNG TIN", "", $"Mở {Room} · {Exam.ExamName} – {Exam.Subject} · {Path.GetFileName(PackagePath)} · {Exam.Minutes} phút");
+        if (existingBackupDir == null) Log("THÔNG TIN", "", $"Mở {Room} · {Exam.ExamName} – {Exam.Subject} · {Path.GetFileName(PackagePath)} · {Exam.Minutes} phút");
     }
 
     public void Close()
     {
+        SaveState(closed: true);
         foreach (var c in Candidates) c.Conn?.Send(Msg.Release);
         Log("THÔNG TIN", "", "Đóng phòng thi · đã mở khoá tất cả máy thí sinh");
         Task.Delay(800).ContinueWith(_ => _ui.Invoke(Dispose));
@@ -95,6 +134,7 @@ public sealed class RoomService : IDisposable
     /// <summary>Dùng khi thoát ứng dụng: báo các máy thí sinh thoát rồi đóng ngay.</summary>
     public void ReleaseAllAndDispose()
     {
+        SaveState(closed: true);
         var sends = Candidates.Where(c => c.Conn != null).Select(c => c.Conn!.SendAsync(Msg.Release)).ToArray();
         try { Task.WaitAll(sends, 800); } catch { }
         Dispose();
@@ -115,7 +155,7 @@ public sealed class RoomService : IDisposable
         {
             TcpClient tcp;
             try { tcp = await l.AcceptTcpClientAsync(); } catch { return; }
-            var conn = new Connection(tcp);
+            var conn = new Connection(tcp, isServer: true);
             conn.Received += (c, m) => _ui.BeginInvoke(() => OnMessage(c, m));
             conn.Closed += c => _ui.BeginInvoke(() => OnClosed(c));
             _ui.Invoke(() => _pending.Add(conn));
@@ -148,6 +188,24 @@ public sealed class RoomService : IDisposable
                 cand.Sheet.Choices[m.Int("no")] = m.Int("choice");
                 cand.NotifyProgress();
                 return;
+            case Msg.AnswerEx:
+                if (cand == null || !cand.IsActive) return;
+                var ax = m.As<AnswerEx>();
+                if (ax == null) return;
+                switch (ax.Type)
+                {
+                    case QuestionType.MultiSelect: cand.Sheet.Multi[ax.No] = ax.Choices; break;
+                    case QuestionType.TrueFalse: cand.Sheet.Tf[ax.No] = ax.Tf; break;
+                    case QuestionType.ShortAnswer: cand.Sheet.Short[ax.No] = ax.Text; break;
+                }
+                cand.NotifyProgress();
+                return;
+            case Msg.Cheat:
+                if (cand == null) return;
+                cand.CheatCount++;
+                cand.RefreshAll();
+                Log("GIAN LẬN", cand.Machine, $"{m.Str("detail")} · {cand.FullName}");
+                break;
             case Msg.Essay:
                 if (cand == null || !cand.IsActive) break;
                 cand.Sheet.Essays[m.Int("no")] = m.Str("text");
@@ -225,7 +283,7 @@ public sealed class RoomService : IDisposable
         {
             if (cand.Status == CandStatus.Waiting) { AssignCode(cand); cand.Status = CandStatus.Doing; }
             SendExam(cand);
-            conn.Send(Msg.Resume, new { choices = cand.Sheet.Choices, essays = cand.Sheet.Essays });
+            conn.Send(Msg.Resume, new { choices = cand.Sheet.Choices, essays = cand.Sheet.Essays, multi = cand.Sheet.Multi, tf = cand.Sheet.Tf, shortAns = cand.Sheet.Short });
         }
         else if (cand.Status == CandStatus.Done)
             SendResult(cand);
@@ -277,6 +335,7 @@ public sealed class RoomService : IDisposable
             c.Status = CandStatus.Doing;
             SendExam(c);
         }
+        SaveState();
         Log("THÔNG TIN", "", $"Đã phát đề cho {Candidates.Count(c => c.Status == CandStatus.Doing)} máy · bắt đầu tính giờ {Exam.Minutes} phút");
         Changed?.Invoke();
     }
@@ -310,6 +369,7 @@ public sealed class RoomService : IDisposable
                 c.Conn?.Send(Msg.Time, new { secondsLeft = LeftOf(c), paused = Paused });
         }
         if (TickCount % 30 == 0) Backup();
+        else if (TickCount % 5 == 0) SaveState();
         Changed?.Invoke();
     }
 
@@ -446,6 +506,8 @@ public sealed class RoomService : IDisposable
     private static readonly Dictionary<string, (Color bg, Color fg)> TagColors = new()
     {
         ["THAM GIA"] = (Color.FromRgb(0xDB, 0xEA, 0xFE), Color.FromRgb(0x1E, 0x3A, 0x8A)),
+        ["KHÔI PHỤC"] = (Color.FromRgb(0xFE, 0xF3, 0xC7), Color.FromRgb(0x92, 0x40, 0x0E)),
+        ["GIAN LẬN"] = (Color.FromRgb(0xFE, 0xE2, 0xE2), Color.FromRgb(0x99, 0x1B, 0x1B)),
         ["NGẮT KẾT NỐI"] = (Color.FromRgb(0xF1, 0xF5, 0xF9), Color.FromRgb(0x47, 0x55, 0x69)),
         ["NGOẠI TUYẾN"] = (Color.FromRgb(0xFE, 0xE2, 0xE2), Color.FromRgb(0xB9, 0x1C, 0x1C)),
         ["NỘP BÀI"] = (Color.FromRgb(0xDC, 0xFC, 0xE7), Color.FromRgb(0x16, 0x65, 0x34)),
@@ -481,6 +543,108 @@ public sealed class RoomService : IDisposable
             File.WriteAllText(Path.Combine(BackupDir, "bai-lam.json"), json);
         }
         catch { }
+        SaveState();
+    }
+
+    // ---------------- Khôi phục sau sự cố ----------------
+    private const string StateFile = "trang-thai.json";
+    public static string BackupRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "iTest-Server", "SaoLuu");
+
+    /// <summary>Ghi trạng thái phòng thi (ghi file tạm rồi đổi tên để không bao giờ để lại file hỏng khi mất điện).</summary>
+    public void SaveState(bool closed = false)
+    {
+        try
+        {
+            if (BackupDir.Length == 0) return;
+            var st = new RoomState
+            {
+                Department = Department, School = School, Room = Room, Proctor = Proctor, PackagePath = PackagePath, BackupDir = BackupDir,
+                Phase = Phase, SecondsLeft = SecondsLeft, SubmitWindowMinutes = SubmitWindowMinutes, ShowScore = ShowScore,
+                StartedAt = StartedAt, EndedAt = EndedAt, Exported = Exported, Closed = closed, SavedAt = DateTime.Now,
+                Candidates = Candidates.Select(c => new CandidateState
+                {
+                    Sheet = c.Sheet, Status = c.Status, Index = c.Index, ExtraSeconds = c.ExtraSeconds, WarnedAt = c.WarnedAt, RevokedAt = c.RevokedAt,
+                    MoveApproved = c.MoveApproved, TotalQuestions = c.TotalQuestions, CheatCount = c.CheatCount, Machine = c.Machine, Ip = c.Ip
+                }).ToList()
+            };
+            var path = Path.Combine(BackupDir, StateFile);
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(st, ExamPackage.Json));
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch { }
+    }
+
+    /// <summary>Tìm phòng thi bị dừng đột ngột (chưa đóng phòng) trong 24 giờ qua, mới nhất trước.</summary>
+    public static RoomState? FindUnclosed()
+    {
+        try
+        {
+            if (!Directory.Exists(BackupRoot)) return null;
+            RoomState? best = null;
+            foreach (var dir in Directory.GetDirectories(BackupRoot))
+            {
+                var f = Path.Combine(dir, StateFile);
+                if (!File.Exists(f) || DateTime.Now - File.GetLastWriteTime(f) > TimeSpan.FromHours(24)) continue;
+                try
+                {
+                    var st = JsonSerializer.Deserialize<RoomState>(File.ReadAllText(f), ExamPackage.Json);
+                    if (st == null || st.Closed || st.Candidates.Count == 0 && st.Phase == Phase.Open) continue;
+                    if (best == null || st.SavedAt > best.SavedAt) best = st;
+                }
+                catch { }
+            }
+            return best;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Bỏ qua phòng thi chưa đóng (đánh dấu đã đóng).</summary>
+    public static void Dismiss(RoomState st)
+    {
+        try
+        {
+            st.Closed = true;
+            File.WriteAllText(Path.Combine(st.BackupDir, StateFile), JsonSerializer.Serialize(st, ExamPackage.Json));
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// Mở lại phòng thi từ trạng thái đã lưu. Thí sinh đang làm bài chuyển sang "mất kết nối" và máy thí sinh tự kết nối lại;
+    /// giờ thi được tạm dừng để giám thị bấm "Tiếp tục" khi các máy đã vào lại đủ.
+    /// </summary>
+    public void Restore(RoomState st)
+    {
+        Department = st.Department; School = st.School; Room = st.Room; Proctor = st.Proctor;
+        SubmitWindowMinutes = st.SubmitWindowMinutes; ShowScore = st.ShowScore;
+        foreach (var cs in st.Candidates.OrderBy(c => c.Index))
+        {
+            if (st.Phase == Phase.Open && cs.Status is CandStatus.Waiting or CandStatus.Connected) continue;
+            if (cs.Status is CandStatus.Waiting or CandStatus.Connected) continue;
+            var c = new Candidate
+            {
+                Index = Candidates.Count, ExtraSeconds = cs.ExtraSeconds, WarnedAt = cs.WarnedAt, RevokedAt = cs.RevokedAt,
+                MoveApproved = cs.MoveApproved, TotalQuestions = cs.TotalQuestions, CheatCount = cs.CheatCount, Ip = cs.Ip
+            };
+            c.Sheet.Candidate = cs.Sheet.Candidate; c.Sheet.Code = cs.Sheet.Code;
+            c.Sheet.Choices = cs.Sheet.Choices; c.Sheet.Essays = cs.Sheet.Essays; c.Sheet.Multi = cs.Sheet.Multi;
+            c.Sheet.Tf = cs.Sheet.Tf; c.Sheet.Short = cs.Sheet.Short; c.Sheet.SubmittedAt = cs.Sheet.SubmittedAt;
+            c.Sheet.Revoked = cs.Sheet.Revoked; c.Sheet.Warnings = cs.Sheet.Warnings;
+            c.Machine = cs.Machine;
+            c.Index = cs.Index;
+            c.Status = cs.Status is CandStatus.Doing or CandStatus.Lost ? CandStatus.Lost : cs.Status;
+            Candidates.Add(c);
+        }
+        Open(st.BackupDir);
+        Phase = st.Phase;
+        SecondsLeft = st.Phase == Phase.Open ? Exam.Minutes * 60 : st.SecondsLeft;
+        StartedAt = st.StartedAt; EndedAt = st.EndedAt; Exported = st.Exported;
+        if (Phase == Phase.Running) Paused = true;
+        Log("KHÔI PHỤC", "", $"Đã khôi phục phòng thi sau sự cố từ bản lưu lúc {st.SavedAt:HH:mm:ss} · {Candidates.Count} thí sinh" +
+            (Phase == Phase.Running ? " · giờ thi đang TẠM DỪNG, bấm “Tiếp tục” khi các máy đã kết nối lại" : ""));
+        SaveState();
+        Changed?.Invoke();
     }
 
     public static string Fmt(int secs) => $"{secs / 60:00}:{secs % 60:00}";

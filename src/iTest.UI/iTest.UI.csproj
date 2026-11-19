@@ -11,6 +11,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="WpfMath" Version="2.*" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\iTest.Core\iTest.Core.csproj" />
   </ItemGroup>
 

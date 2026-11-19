@@ -12,6 +12,10 @@ permissions:
   pages: write
   id-token: write
 
+env:
+  # Đặt secret CODESIGN_PFX_BASE64 (file .pfx mã hoá base64) và CODESIGN_PASSWORD để tự động ký số.
+  CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
+
 jobs:
   build:
     runs-on: windows-latest
@@ -30,6 +34,10 @@ jobs:
           if ("${{ github.ref_type }}" -eq "tag") { $v = "${{ github.ref_name }}".TrimStart('v') }
           "version=$v" >> $env:GITHUB_OUTPUT
 
+      - name: Kiểm thử tự động phần lõi
+        shell: pwsh
+        run: dotnet test tests/iTest.Core.Tests/iTest.Core.Tests.csproj -c Release --logger "trx;LogFileName=ketqua.trx" --logger "console;verbosity=normal"
+
       - name: Build & publish 3 ứng dụng (self-contained, 1 file)
         shell: pwsh
         run: |
@@ -39,6 +47,15 @@ jobs:
           dotnet publish src/iTest.Client/iTest.Client.csproj @common -o publish/iTest
           dotnet publish src/iTest.Server/iTest.Server.csproj @common -o publish/iTest-Server
           dotnet publish src/iTest.Editor/iTest.Editor.csproj @common -o publish/iTest-Editor
+          dotnet publish tools/iTest.LoadTest/iTest.LoadTest.csproj @common -o publish/LoadTest
+
+      - name: Ký số các file .exe ứng dụng (khi có chứng thư số)
+        if: env.CODESIGN_PFX_BASE64 != ''
+        env:
+          CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
+          CODESIGN_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
+        shell: pwsh
+        run: ./installer/sign.ps1 -Files (Get-ChildItem publish -Recurse -Filter *.exe | ForEach-Object FullName)
 
       - name: Cài Inno Setup
         shell: pwsh
@@ -55,16 +72,32 @@ jobs:
           }
           Get-ChildItem dist
 
+      - name: Ký số các bộ cài (khi có chứng thư số)
+        if: env.CODESIGN_PFX_BASE64 != ''
+        env:
+          CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
+          CODESIGN_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
+        shell: pwsh
+        run: ./installer/sign.ps1 -Files (Get-ChildItem dist -Filter *.exe | ForEach-Object FullName)
+
+      - name: Đóng gói công cụ thử tải
+        shell: pwsh
+        run: Compress-Archive -Path publish/LoadTest/iTest-LoadTest.exe -DestinationPath dist/iTest-LoadTest.zip -Force
+
       - uses: actions/upload-artifact@v4
         with:
           name: iTest-Setup-${{ steps.ver.outputs.version }}
-          path: dist/*.exe
+          path: |
+            dist/*.exe
+            dist/iTest-LoadTest.zip
 
       - name: Phát hành (khi đẩy tag v*)
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.exe
+          files: |
+            dist/*.exe
+            dist/iTest-LoadTest.zip
           generate_release_notes: true
 
   website:

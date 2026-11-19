@@ -15,6 +15,7 @@
                     <Button Content="Nhập từ Word" Margin="0,0,8,0" Click="ImportWord_Click"/>
                     <Button Content="Nhập từ Excel" Margin="0,0,8,0" Click="ImportExcel_Click"/>
                     <Button Content="Tải file Excel mẫu" Margin="0,0,8,0" Click="Template_Click"/>
+                    <Button Content="Xuất đề PDF…" Margin="0,0,8,0" Click="ExportPdf_Click" ToolTip="Xuất bộ câu hỏi thành đề thi in giấy (PDF), kèm đáp án từng mã đề"/>
                     <Button x:Name="PackBtn" Content="Đóng gói bộ câu hỏi" Style="{StaticResource BtnTeal}" Click="Pack_Click"/>
                 </WrapPanel>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -155,9 +156,23 @@
                             </Border>
                             <TextBlock x:Name="EMissing" Margin="10,0,0,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
                         </DockPanel>
+                        <DockPanel x:Name="ETypeRow" Margin="0,14,0,0">
+                            <TextBlock Text="Loại câu" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,10,0"/>
+                            <ComboBox x:Name="EType" Width="240" HorizontalAlignment="Left" SelectionChanged="EType_Changed"/>
+                            <TextBlock x:Name="ETypeHint" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap"/>
+                        </DockPanel>
                         <TextBlock Text="Nội dung câu hỏi" Style="{StaticResource FieldLabel}" Margin="0,16,0,4"/>
                         <TextBox x:Name="EText" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="90" VerticalContentAlignment="Top" FontSize="15" TextChanged="EText_Changed"/>
-                        <WrapPanel x:Name="EMathBar" Margin="0,6,0,0"/>
+                        <WrapPanel x:Name="EMathBar" Margin="0,6,0,0">
+                            <Button Content="∑  Công thức toán…" Style="{StaticResource BtnPrimary}" MinHeight="30" Margin="0,0,8,4" Click="Formula_Click"
+                                    ToolTip="Soạn công thức (phân số, căn, mũ, hệ phương trình…) và chèn vào ô đang soạn. Công thức được viết giữa hai dấu $."/>
+                        </WrapPanel>
+                        <Border x:Name="EPreviewBox" Visibility="Collapsed" Margin="0,6,0,0" Padding="12,8" CornerRadius="8" Background="#F8FAFC" BorderBrush="{StaticResource Line}" BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="XEM TRƯỚC" FontSize="10" FontWeight="Bold" Foreground="{StaticResource Muted}" Margin="0,0,0,4"/>
+                                <ContentControl x:Name="EPreview"/>
+                            </StackPanel>
+                        </Border>
                         <WrapPanel Margin="0,8,0,0">
                             <Button Content="Chèn ảnh…" Margin="0,0,8,0" Click="AddImage_Click"/>
                             <Button Content="Chèn âm thanh…" Margin="0,0,8,0" Click="AddAudio_Click"/>
@@ -166,8 +181,14 @@
                         <TextBlock x:Name="EMediaText" Style="{StaticResource Hint}" Margin="0,6,0,0"/>
                         <Image x:Name="EImage" MaxHeight="200" HorizontalAlignment="Left" Margin="0,6,0,0"/>
                         <StackPanel x:Name="EMcPanel" Margin="0,14,0,0">
-                            <TextBlock Text="Phương án · chọn đáp án đúng" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock x:Name="EOptTitle" Text="Phương án · chọn đáp án đúng" Style="{StaticResource FieldLabel}"/>
                             <ItemsControl x:Name="EOptions"/>
+                        </StackPanel>
+                        <StackPanel x:Name="EShortPanel" Margin="0,14,0,0" Visibility="Collapsed">
+                            <TextBlock Text="Đáp án đúng" Style="{StaticResource FieldLabel}"/>
+                            <TextBox x:Name="EShortKey" FontSize="15" TextChanged="EShortKey_Changed"/>
+                            <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0" TextWrapping="Wrap"
+                                       Text="Nhiều cách viết được chấp nhận thì cách nhau bằng dấu chấm phẩy, ví dụ: 0,5; 1/2. Khi chấm, máy bỏ qua khoảng trắng, chữ hoa/thường và coi dấu phẩy như dấu chấm."/>
                         </StackPanel>
                         <StackPanel x:Name="EEsPanel" Margin="0,14,0,0" Visibility="Collapsed">
                             <TextBlock Text="Đáp án / hướng dẫn chấm (không hiển thị cho thí sinh)" Style="{StaticResource FieldLabel}"/>

@@ -5,3 +5,7 @@ dist/
 .vs/
 *.user
 *.suo
+
+# Chứng thư ký số
+*.pfx
+*.pfx.base64.txt
