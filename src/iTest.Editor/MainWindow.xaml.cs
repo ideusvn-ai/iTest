@@ -5,6 +5,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -25,7 +26,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(800) };
     private readonly List<TextBox> _optBoxes = new();
     private TextBox? _mathTarget;
-    private static readonly QuestionType[] ObjectiveTypes = { QuestionType.MultipleChoice, QuestionType.MultiSelect, QuestionType.TrueFalse, QuestionType.ShortAnswer };
+    private static readonly QuestionType[] ObjectiveTypes = { QuestionType.MultipleChoice, QuestionType.MultiSelect, QuestionType.TrueFalse };
     private static readonly CultureInfo Vi = CultureInfo.GetCultureInfo("vi-VN");
     private static readonly string[] MathSymbols = { "√", "²", "³", "≤", "≥", "≠", "±", "×", "÷", "π", "Δ", "∞", "°", "∈", "∉", "⊂", "∩", "∪", "∅", "ℝ", "⇒", "⇔", "α", "β" };
 
@@ -37,7 +38,7 @@ public partial class MainWindow : Window
         foreach (var tb in new[] { FExam, FSubject, FAuthor, FUnit, EText, EGuide }) VietInput.Attach(tb);
         foreach (var s in MathSymbols)
         {
-            var b = new Button { Content = s, MinWidth = 32, MinHeight = 30, Padding = new Thickness(6, 0, 6, 0), Margin = new Thickness(0, 0, 4, 4) };
+            var b = new Button { Content = s, MinWidth = 32, MinHeight = 30, Padding = new Thickness(6, 0, 6, 0), Margin = new Thickness(0, 0, 4, 4), IsTabStop = false, Focusable = false };
             b.Click += (_, _) => VietInput.Insert(_mathTarget ?? EText, s);
             EMathBar.Children.Add(b);
         }
@@ -45,6 +46,7 @@ public partial class MainWindow : Window
         EText.GotKeyboardFocus += (_, _) => _mathTarget = EText;
         EGuide.GotKeyboardFocus += (_, _) => _mathTarget = EGuide;
         VietInput.Attach(EShortKey);
+        PreviewKeyDown += FastEntryKeys;
         RefreshDrafts();
         UpdateFormTotal();
         Closing += (_, _) => { if (_draft != null) { SaveNow(); RememberSession(); } };
@@ -273,8 +275,7 @@ public partial class MainWindow : Window
     {
         "Thí sinh chọn một phương án đúng.",
         "Thí sinh chọn tất cả phương án đúng; chỉ được điểm khi chọn đúng và đủ.",
-        "Mỗi ý chọn Đúng hoặc Sai. 4 ý: đúng 1 ý được 10%, 2 ý 25%, 3 ý 50%, 4 ý 100% điểm câu.",
-        "Thí sinh điền câu trả lời (số hoặc cụm từ ngắn); máy chấm tự động."
+        "Mỗi ý chọn Đúng hoặc Sai. 4 ý: đúng 1 ý được 10%, 2 ý 25%, 3 ý 50%, 4 ý 100% điểm câu."
     };
 
     /// <summary>Dựng các ô phương án theo loại câu đang soạn.</summary>
@@ -300,7 +301,7 @@ public partial class MainWindow : Window
             switch (q.Type)
             {
                 case QuestionType.MultiSelect:
-                    var cb = new CheckBox { Content = ((char)('A' + k)).ToString(), FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Width = 52, IsChecked = q.Corrects.Contains(k), ToolTip = "Là đáp án đúng" };
+                    var cb = new CheckBox { Content = ((char)('A' + k)).ToString(), FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Width = 52, IsChecked = q.Corrects.Contains(k), ToolTip = "Là đáp án đúng (Ctrl+Space trong ô phương án)", IsTabStop = false };
                     cb.Checked += (_, _) => { if (_loading || Cur == null) return; if (!Cur.Corrects.Contains(idx)) Cur.Corrects.Add(idx); Cur.Corrects.Sort(); Changed(); };
                     cb.Unchecked += (_, _) => { if (_loading || Cur == null) return; Cur.Corrects.Remove(idx); Changed(); };
                     mark = cb;
@@ -308,15 +309,15 @@ public partial class MainWindow : Window
                 case QuestionType.TrueFalse:
                     var tf = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
                     var lab = new TextBlock { Text = (char)('a' + k) + ")", FontWeight = FontWeights.Bold, Width = 26, VerticalAlignment = VerticalAlignment.Center };
-                    var rt = new RadioButton { GroupName = "tf" + k, Content = "Đúng", IsChecked = q.TfKey[k] == true, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
-                    var rf = new RadioButton { GroupName = "tf" + k, Content = "Sai", IsChecked = q.TfKey[k] == false, Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
+                    var rt = new RadioButton { GroupName = "tf" + k, Content = "Đúng", IsChecked = q.TfKey[k] == true, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center, IsTabStop = false };
+                    var rf = new RadioButton { GroupName = "tf" + k, Content = "Sai", IsChecked = q.TfKey[k] == false, Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center, IsTabStop = false };
                     rt.Checked += (_, _) => { if (_loading || Cur == null) return; SetTf(idx, true); };
                     rf.Checked += (_, _) => { if (_loading || Cur == null) return; SetTf(idx, false); };
                     tf.Children.Add(lab); tf.Children.Add(rt); tf.Children.Add(rf);
                     mark = tf;
                     break;
                 default:
-                    var rb = new RadioButton { GroupName = "correct", Content = ((char)('A' + k)).ToString(), FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Width = 52, IsChecked = q.Correct == k, ToolTip = "Đặt làm đáp án đúng" };
+                    var rb = new RadioButton { GroupName = "correct", Content = ((char)('A' + k)).ToString(), FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Width = 52, IsChecked = q.Correct == k, ToolTip = "Đặt làm đáp án đúng (Ctrl+Space trong ô phương án)", IsTabStop = false };
                     rb.Checked += (_, _) => { if (_loading || Cur == null) return; Cur.Correct = idx; Changed(); };
                     mark = rb;
                     break;
@@ -337,6 +338,73 @@ public partial class MainWindow : Window
             _optBoxes.Add(tb);
         }
         EOptions.Items.Add(panel);
+    }
+
+    /// <summary>
+    /// Nhập nhanh: Tab / Shift+Tab đi qua các ô của câu đang soạn (nội dung → phương án A–D → đáp án/hướng dẫn → điểm);
+    /// Tab ở ô cuối sang câu tiếp theo. Ctrl+Enter sang câu sau. Trong ô phương án: Ctrl+Space đánh dấu đáp án đúng
+    /// (câu Đúng/Sai: lần lượt Đúng → Sai → bỏ chọn).
+    /// </summary>
+    private void FastEntryKeys(object sender, KeyEventArgs e)
+    {
+        if (EditPanel.Visibility != Visibility.Visible || Cur == null) return;
+        var focused = Keyboard.FocusedElement as TextBox;
+        var fields = new List<TextBox> { EText };
+        fields.AddRange(_optBoxes);
+        if (EShortPanel.Visibility == Visibility.Visible) fields.Add(EShortKey);
+        if (EEsPanel.Visibility == Visibility.Visible) fields.Add(EGuide);
+        fields.Add(EPoints);
+        bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+
+        if (e.Key == Key.Enter && ctrl)
+        {
+            e.Handled = true;
+            GoNextQuestion();
+            return;
+        }
+        if (focused == null || !fields.Contains(focused)) return;
+        if (e.Key == Key.Tab && !ctrl)
+        {
+            e.Handled = true;
+            int i = fields.IndexOf(focused);
+            bool back = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+            if (!back && i == fields.Count - 1) { GoNextQuestion(); return; }
+            if (back && i == 0) { FocusField(EPoints); return; }
+            FocusField(fields[i + (back ? -1 : 1)]);
+            return;
+        }
+        if (e.Key == Key.Space && ctrl && _optBoxes.Contains(focused))
+        {
+            e.Handled = true;
+            int k = _optBoxes.IndexOf(focused);
+            switch (Cur.Type)
+            {
+                case QuestionType.MultipleChoice: Cur.Correct = k; break;
+                case QuestionType.MultiSelect: if (!Cur.Corrects.Remove(k)) Cur.Corrects.Add(k); Cur.Corrects.Sort(); break;
+                case QuestionType.TrueFalse:
+                    while (Cur.TfKey.Count <= k) Cur.TfKey.Add(null);
+                    Cur.TfKey[k] = Cur.TfKey[k] switch { null => true, true => false, _ => null };
+                    break;
+            }
+            Changed();
+            LoadCurrent();
+            FocusField(_optBoxes[k]);
+        }
+    }
+
+    private static void FocusField(TextBox tb)
+    {
+        tb.Focus();
+        tb.SelectAll();
+        tb.BringIntoView();
+    }
+
+    private void GoNextQuestion()
+    {
+        if (QList.SelectedIndex >= _rows.Count - 1) return;
+        QList.SelectedIndex++;
+        QList.ScrollIntoView(QList.SelectedItem);
+        Dispatcher.BeginInvoke(() => { EText.Focus(); EText.CaretIndex = EText.Text.Length; }, System.Windows.Threading.DispatcherPriority.Input);
     }
 
     private void SetTf(int idx, bool v)
@@ -661,7 +729,7 @@ public partial class MainWindow : Window
         var x = _draft.Exam;
         var opt = new PdfDialog(x) { Owner = this };
         if (opt.ShowDialog() != true) return;
-        var name = string.Join("_", $"De_{x.Subject}_{x.ExamName}".Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Replace(' ', '_');
+        var name = string.Join("_", $"BoDeThiMau_{x.Subject}".Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Replace(' ', '_');
         var dlg = new SaveFileDialog { Filter = "PDF (*.pdf)|*.pdf", FileName = name + ".pdf" };
         if (dlg.ShowDialog(this) != true) return;
         try

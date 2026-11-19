@@ -57,6 +57,8 @@ public sealed class RoomService : IDisposable
     private readonly Dispatcher _ui;
     private TcpListener? _listener;
     private BeaconSender? _beacon;
+    /// <summary>Mã phiên quảng bá của phòng đang mở (để nhận ra gói tin của chính mình).</summary>
+    public string? ServerId => _beacon?.ServerId;
     private readonly DispatcherTimer _tick;
     private readonly List<Connection> _pending = new();
 
@@ -173,6 +175,10 @@ public sealed class RoomService : IDisposable
         if (cand != null) cand.LastSeen = DateTime.Now;
         switch (m.Str("t"))
         {
+            case Msg.DupServer:
+                Log("CẢNH BÁO", m.Str("machine"), $"Máy {m.Str("machine")} ({m.Str("ip")}) vừa mở iTest-Server trong cùng mạng khi phòng thi đang mở — máy đó đã bị chặn, không mở được phòng thi khác");
+                conn.Close();
+                return;
             case Msg.Ping:
                 conn.Send(Msg.Pong);
                 return;

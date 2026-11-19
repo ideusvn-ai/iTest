@@ -27,9 +27,8 @@ public static class ExamPdf
     /// <summary>Phải gọi trên luồng giao diện (công thức được vẽ bằng WPF trước khi dựng PDF).</summary>
     public static void Export(string path, ExamSet exam, string mediaFolder, PdfOptions o)
     {
-        var layouts = Shuffler.Build(exam);
-        var chosen = o.Codes.Count == 0 ? layouts.Take(1).ToList() : layouts.Where(l => o.Codes.Contains(l.Code)).ToList();
-        if (chosen.Count == 0) chosen = layouts.Take(1).ToList();
+        // Bộ đề mẫu: in đúng thứ tự câu và phương án đã soạn (không trộn, không mã đề).
+        var chosen = Shuffler.Build(new ExamSet { Codes = 1, Questions = exam.Questions }).Take(1).ToList();
 
         // Vẽ trước mọi công thức thành ảnh.
         var formulas = new Dictionary<string, (byte[] png, double w, double h)?>();
@@ -91,7 +90,6 @@ public static class ExamPdf
             t.PageNumberWithinSection(sec);
             t.Span("/");
             t.TotalPagesWithinSection(sec);
-            t.Span($" – Mã đề {layout.Code}");
         });
 
         page.Content().Section(sec).Column(col =>
@@ -115,17 +113,13 @@ public static class ExamPdf
                 });
                 r.RelativeItem(6).Column(c =>
                 {
-                    c.Item().AlignCenter().Text((string.IsNullOrWhiteSpace(exam.ExamName) ? "ĐỀ KIỂM TRA" : exam.ExamName).ToUpper(Vi)).Bold();
+                    c.Item().AlignCenter().Text("BỘ ĐỀ THI MẪU").Bold().FontSize(14);
                     if (!string.IsNullOrWhiteSpace(exam.SchoolYear)) c.Item().AlignCenter().Text("NĂM HỌC " + exam.SchoolYear).Bold();
                     c.Item().AlignCenter().Text("Môn: " + exam.Subject).Bold();
                     c.Item().AlignCenter().Text($"Thời gian làm bài: {exam.Minutes} phút, không kể thời gian phát đề").Italic().FontSize(11.5f);
                 });
             });
-            col.Item().PaddingTop(10).Row(r =>
-            {
-                r.RelativeItem().AlignBottom().Text("Họ, tên thí sinh: ……………………………………………   Số báo danh: ………………");
-                r.ConstantItem(92).Border(1).PaddingVertical(4).AlignCenter().Text("Mã đề " + layout.Code).Bold();
-            });
+            col.Item().PaddingTop(6).LineHorizontal(0.6f).LineColor(Colors.Grey.Medium);
 
             // ---- Nội dung ----
             var qs = layout.Order.Select(id => byId[id]).ToList();
@@ -220,13 +214,13 @@ public static class ExamPdf
         {
             col.Spacing(4);
             col.Item().AlignCenter().Text("ĐÁP ÁN VÀ HƯỚNG DẪN CHẤM").Bold().FontSize(15);
-            col.Item().AlignCenter().Text($"{exam.ExamName} · Môn {exam.Subject}" + (string.IsNullOrWhiteSpace(exam.SchoolYear) ? "" : $" · Năm học {exam.SchoolYear}")).Italic();
+            col.Item().AlignCenter().Text("Bộ đề thi mẫu · Môn " + exam.Subject + (string.IsNullOrWhiteSpace(exam.SchoolYear) ? "" : $" · Năm học {exam.SchoolYear}")).Italic();
             col.Item().PaddingTop(2).AlignCenter().Text("(Tài liệu dành cho giáo viên – không phát cho thí sinh)").Italic().FontSize(11);
 
             foreach (var layout in layouts)
             {
                 var qs = layout.Order.Select(id => byId[id]).ToList();
-                col.Item().PaddingTop(14).Text("MÃ ĐỀ " + layout.Code).Bold().FontSize(13.5f);
+                col.Item().PaddingTop(10);
                 var obj = qs.Select((q, i) => (q, no: i + 1)).Where(x => x.q.Type.IsObjective()).ToList();
                 if (obj.Count > 0)
                 {

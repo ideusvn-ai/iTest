@@ -60,8 +60,7 @@ Dùng nút *Tải file Excel mẫu* trong Editor. Cột: `Loại | Nội dung | 
 |---|---|---|
 | `TN` | Trắc nghiệm 1 đáp án | `B` |
 | `NDA` | Nhiều đáp án đúng (chỉ được điểm khi chọn đúng và đủ) | `A,C` |
-| `DS` | Đúng/Sai 4 ý (A–D là các ý a–d) | `Đ,S,Đ,S` |
-| `TLN` | Trả lời ngắn (máy chấm) | `0,75; 3/4` (nhiều cách viết cách nhau bằng `;`) |
+| `DS` | Trắc nghiệm đúng/sai 4 ý (A–D là các ý a–d) | `Đ,S,Đ,S` |
 | `TL` | Tự luận | hướng dẫn chấm |
 
 Câu Đúng/Sai 4 ý tính điểm như đề thi tốt nghiệp THPT: đúng 1 ý 10%, 2 ý 25%, 3 ý 50%, 4 ý 100% điểm câu.
@@ -71,13 +70,17 @@ Viết công thức LaTeX giữa hai dấu `$`, ví dụ `Tính $\frac{1}{2}+\sq
 để chọn mẫu (phân số, căn, mũ, tích phân, hệ phương trình…) có xem trước. Công thức hiển thị đẹp trên đề của thí sinh và trong file PDF.
 
 ### Xuất đề PDF
-Trong Editor bấm **Xuất đề PDF…**: đề in theo bố cục đề kiểm tra (Sở/Trường, kỳ thi, môn, thời gian, mã đề, số trang),
-chọn in đề gốc hoặc tất cả mã đề đã trộn, kèm trang **đáp án và hướng dẫn chấm** từng mã đề.
+Trong Editor bấm **Xuất đề PDF…**: đề in với tiêu đề **BỘ ĐỀ THI MẪU** (Sở/Trường, môn, năm học, thời gian, số trang),
+đúng thứ tự đã soạn, không có mã đề và ô họ tên thí sinh, kèm trang **đáp án và hướng dẫn chấm** nếu chọn.
+
+### Nhập nhanh trong Editor
+`Tab` / `Shift+Tab`: đi qua nội dung → phương án A–D → điểm; `Tab` ở ô cuối sang câu sau ·
+`Ctrl+Space` trong ô phương án: đánh dấu đáp án đúng (câu đúng/sai: Đúng → Sai → bỏ chọn) · `Ctrl+Enter`: câu sau.
 
 ## iTest-Server
-- **Mật khẩu quản trị**: lần đầu mở iTest-Server sẽ yêu cầu đặt mật khẩu (lưu dạng băm PBKDF2 tại
-  `C:\ProgramData\iTest-Server\admin.json`); sau đó mỗi lần mở đều phải đăng nhập. Đổi ở nút *Đổi mật khẩu*.
-  Quên mật khẩu: quản trị viên Windows xoá file trên rồi mở lại để đặt mật khẩu mới.
+- **Chỉ một máy chủ trong mạng**: khi mở, iTest-Server kiểm tra mạng LAN vài giây. Nếu đã có máy chủ khác đang mở phòng thi
+  (cùng workgroup), máy mới bị chặn với thông báo lỗi và máy chủ đang mở phòng nhận cảnh báo trong nhật ký (thẻ *CẢNH BÁO*).
+  Mỗi máy chỉ chạy được một iTest-Server.
 - **Khôi phục sau sự cố**: trạng thái phòng thi được ghi mỗi 5 giây vào `Documents\iTest-Server\SaoLuu\<phòng>\trang-thai.json`.
   Nếu máy chủ tắt đột ngột, mở lại iTest-Server sẽ thấy *Khôi phục phòng thi*: các máy thí sinh tự kết nối lại và làm tiếp
   đúng bài đã lưu; giờ thi được **tạm dừng** cho tới khi giám thị bấm *Tiếp tục*.
@@ -136,7 +139,7 @@ src/iTest.Client   Ứng dụng thí sinh (chế độ khoá máy: KioskGuard.cs
 src/iTest.UI       … và hiển thị công thức LaTeX (RichMath.cs)
 src/iTest.Client   … phát hiện gian lận (AntiCheat.cs)
 src/iTest.Server   Bảng điều khiển phòng thi (RoomService.cs: khôi phục sự cố), xuất Excel/PDF (Exporter.cs),
-                   xuất điểm SMAS/vnEdu (SchoolExport.cs), mật khẩu quản trị (AdminAuth.cs)
+                   xuất điểm SMAS/vnEdu (SchoolExport.cs)
 src/iTest.Editor   Soạn đề, bản nháp tự lưu (Drafts.cs), nhập Word/Excel (Importer.cs), xuất đề PDF (ExamPdf.cs)
 tests/             Kiểm thử tự động phần lõi (xUnit)
 tools/             iTest-LoadTest: giả lập nhiều máy thí sinh

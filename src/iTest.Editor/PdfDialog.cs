@@ -12,9 +12,7 @@ public sealed class PdfDialog : Window
 {
     private static readonly string Store = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "iTest-Editor", "pdf-header.txt");
     private readonly TextBox _dep = new(), _school = new();
-    private readonly RadioButton _orig = new() { Content = "Chỉ đề gốc (mã 101, đúng thứ tự đã soạn)", IsChecked = true, Margin = new Thickness(0, 4, 0, 4) };
-    private readonly RadioButton _all = new() { Margin = new Thickness(0, 4, 0, 4) };
-    private readonly CheckBox _key = new() { Content = "Kèm trang đáp án và hướng dẫn chấm cho từng mã đề", IsChecked = true, Margin = new Thickness(0, 10, 0, 0) };
+    private readonly CheckBox _key = new() { Content = "Kèm trang đáp án và hướng dẫn chấm", IsChecked = true, Margin = new Thickness(0, 10, 0, 0) };
     private readonly ExamSet _exam;
     public PdfOptions Options { get; } = new();
 
@@ -42,11 +40,11 @@ public sealed class PdfDialog : Window
         root.Children.Add(_dep);
         root.Children.Add(Label("Trường"));
         root.Children.Add(_school);
-        root.Children.Add(Label("Mã đề cần in"));
-        root.Children.Add(_orig);
-        int codes = Math.Max(1, exam.Codes);
-        _all.Content = exam.Codes > 2 ? $"Tất cả {codes} mã đề đã trộn (101 – {100 + codes})" : "Tất cả mã đề (bộ đề dưới 3 mã nên các mã giống đề gốc)";
-        root.Children.Add(_all);
+        root.Children.Add(new TextBlock
+        {
+            Text = "Đề được in với tiêu đề “BỘ ĐỀ THI MẪU”, đúng thứ tự câu và phương án đã soạn, không có mã đề và ô họ tên thí sinh.",
+            TextWrapping = TextWrapping.Wrap, Foreground = muted, Margin = new Thickness(0, 12, 0, 0)
+        });
         root.Children.Add(_key);
         var miss = exam.Questions.Count(q => q.Missing().Count > 0);
         if (miss > 0)
@@ -68,9 +66,7 @@ public sealed class PdfDialog : Window
         Options.Department = _dep.Text.Trim();
         Options.School = _school.Text.Trim();
         Options.AnswerKey = _key.IsChecked == true;
-        Options.Codes = _all.IsChecked == true
-            ? Enumerable.Range(0, Math.Max(1, _exam.Codes)).Select(i => (101 + i).ToString()).ToList()
-            : new List<string> { "101" };
+        Options.Codes = new List<string> { "101" };
         try { Directory.CreateDirectory(Path.GetDirectoryName(Store)!); File.WriteAllLines(Store, new[] { Options.Department, Options.School }); } catch { }
         DialogResult = true;
     }

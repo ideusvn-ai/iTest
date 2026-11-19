@@ -35,70 +35,89 @@ public partial class MainWindow : Window
         FilterBox.SelectedIndex = 0;
         Closing += OnClosing;
         SetupPanel.Visibility = Visibility.Collapsed;
-        ShowLogin();
+        StartPeerWatch();
     }
 
-    // ================== Mật khẩu quản trị ==================
-    private int _loginFails;
-    private DateTime _lockUntil;
+    // ================== Chỉ một máy chủ trong mạng LAN ==================
+    private BeaconListener? _peers;
+    private RoomBeacon? _peer;
+    private DateTime _peerSeen;
+    private readonly HashSet<string> _peerReported = new();
+    private readonly HashSet<string> _peerNotified = new();
+    private readonly HashSet<string> _ownIds = new();
 
-    private void ShowLogin()
+    /// <summary>Lắng nghe gói quảng bá của iTest-Server khác cùng workgroup suốt thời gian chạy.</summary>
+    private async void StartPeerWatch()
     {
-        bool first = !AdminAuth.IsSet;
-        LoginTitle.Text = first ? "Tạo mật khẩu quản trị" : "Đăng nhập quản trị";
-        LoginHint.Text = first
-            ? $"Lần đầu sử dụng trên máy này: đặt mật khẩu quản trị (ít nhất {AdminAuth.MinLength} ký tự). Mỗi lần mở iTest-Server cần nhập mật khẩu này, để thí sinh không tự mở được bảng điều khiển."
-            : "Nhập mật khẩu quản trị để mở bảng điều khiển phòng thi.";
-        LoginConfirmRow.Visibility = first ? Visibility.Visible : Visibility.Collapsed;
-        LoginBtn.Content = first ? "Lưu mật khẩu và tiếp tục" : "Đăng nhập";
-        LoginPanel.Visibility = Visibility.Visible;
-        Loaded += (_, _) => LoginPass.Focus();
+        try
+        {
+            _peers = new BeaconListener();
+            _peers.Found += b => Dispatcher.BeginInvoke(() => OnPeer(b));
+            _peers.Start();
+        }
+        catch { /* không nghe được UDP: bỏ qua kiểm tra */ }
+        await Task.Delay(3500);   // máy chủ đang mở phòng quảng bá mỗi 2 giây
+        ScanPanel.Visibility = Visibility.Collapsed;
+        if (!PeerActive()) { Anim.Show(SetupPanel); CheckRecovery(); }
     }
 
-    private void LoginPass_KeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Enter) Login_Click(sender, e); }
+    private bool PeerActive() => _peer != null && DateTime.Now - _peerSeen < TimeSpan.FromSeconds(8);
 
-    private void Login_Click(object sender, RoutedEventArgs e)
+    private void OnPeer(RoomBeacon b)
     {
-        LoginError.Text = "";
-        if (!AdminAuth.IsSet)
+        if (_room?.ServerId is { } id) _ownIds.Add(id);
+        if (_ownIds.Contains(b.ServerId)) return;   // gói của chính máy này (kể cả phòng vừa đóng)
+        _peer = b; _peerSeen = DateTime.Now;
+        if (_room != null)
         {
-            if (LoginPass.Password.Length < AdminAuth.MinLength) { LoginError.Text = $"Mật khẩu cần ít nhất {AdminAuth.MinLength} ký tự."; return; }
-            if (LoginPass.Password != LoginPass2.Password) { LoginError.Text = "Hai lần nhập mật khẩu không khớp."; return; }
-            try { AdminAuth.Set(LoginPass.Password); }
-            catch (Exception ex) { LoginError.Text = "Không lưu được mật khẩu: " + ex.Message; return; }
+            // Đang mở phòng mà có máy chủ khác cũng mở phòng (hai máy mở cùng lúc)
+            if (_peerReported.Add(b.ServerId))
+                _room.Log("CẢNH BÁO", b.Host, $"Máy {b.Host} ({b.Address}) cũng đang mở phòng thi “{b.Room}” trong cùng mạng — thí sinh có thể vào nhầm phòng");
+            return;
         }
-        else
+        Block(b);
+    }
+
+    /// <summary>Chặn máy này và báo cho máy chủ đang mở phòng biết.</summary>
+    private void Block(RoomBeacon b)
+    {
+        BlockText.Text = $"Máy {b.Host} ({b.Address}) đang mở phòng thi “{b.Room}” · {b.Exam}" +
+                         (string.IsNullOrWhiteSpace(b.Proctor) ? "" : $" · giám thị {b.Proctor}") + $" · {b.Candidates} thí sinh.";
+        BlockNote.Text = "Máy này không được mở phòng thi khi máy chủ kia còn hoạt động. Đã gửi thông báo tới máy chủ đang mở phòng. "
+                       + "Nếu phòng kia đã đóng, bấm “Kiểm tra lại”.";
+        SetupPanel.Visibility = Visibility.Collapsed;
+        ScanPanel.Visibility = Visibility.Collapsed;
+        if (BlockPanel.Visibility != Visibility.Visible) Anim.Show(BlockPanel);
+        if (_peerNotified.Add(b.ServerId)) _ = NotifyPeer(b);
+    }
+
+    private static async Task NotifyPeer(RoomBeacon b)
+    {
+        try
         {
-            if (DateTime.Now < _lockUntil) { LoginError.Text = $"Nhập sai nhiều lần. Thử lại sau {(int)(_lockUntil - DateTime.Now).TotalSeconds + 1} giây."; return; }
-            if (!AdminAuth.Verify(LoginPass.Password))
-            {
-                _loginFails++;
-                LoginPass.Clear();
-                if (_loginFails >= 5) { _lockUntil = DateTime.Now.AddSeconds(30 * (_loginFails - 4)); LoginError.Text = "Sai mật khẩu. Tạm khoá đăng nhập 30 giây."; }
-                else LoginError.Text = $"Sai mật khẩu (lần {_loginFails}/5).";
-                return;
-            }
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var c = await Connection.ConnectAsync(b.Address, b.Port, cts.Token);
+            c.Start();
+            await c.SendAsync(Msg.DupServer, new { machine = Environment.MachineName, ip = NetUtil.LocalIPv4(), user = Environment.UserName })
+                   .WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.Delay(500);
+            c.Dispose();
         }
-        LoginPass.Clear(); LoginPass2.Clear();
-        LoginPanel.Visibility = Visibility.Collapsed;
+        catch { }
+    }
+
+    private async void BlockRetry_Click(object sender, RoutedEventArgs e)
+    {
+        BlockRetry.IsEnabled = false;
+        BlockRetry.Content = "Đang kiểm tra…";
+        _peer = null;
+        await Task.Delay(4500);
+        BlockRetry.IsEnabled = true;
+        BlockRetry.Content = "Kiểm tra lại";
+        if (PeerActive()) return;
+        BlockPanel.Visibility = Visibility.Collapsed;
         Anim.Show(SetupPanel);
         CheckRecovery();
-    }
-
-    private void LoginQuit_Click(object sender, RoutedEventArgs e) => Close();
-
-    private void ChangePass_Click(object sender, RoutedEventArgs e)
-    {
-        var old = Prompt.Show(this, "Đổi mật khẩu quản trị", "Mật khẩu hiện tại:", "", password: true);
-        if (old == null) return;
-        if (!AdminAuth.Verify(old)) { MessageBox.Show(this, "Mật khẩu hiện tại không đúng.", "Đổi mật khẩu", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
-        var n1 = Prompt.Show(this, "Đổi mật khẩu quản trị", $"Mật khẩu mới (ít nhất {AdminAuth.MinLength} ký tự):", "", password: true);
-        if (n1 == null) return;
-        var n2 = Prompt.Show(this, "Đổi mật khẩu quản trị", "Nhập lại mật khẩu mới:", "", password: true);
-        if (n2 == null) return;
-        if (n1 != n2) { MessageBox.Show(this, "Hai lần nhập không khớp.", "Đổi mật khẩu", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
-        try { AdminAuth.Set(n1); MessageBox.Show(this, "Đã đổi mật khẩu quản trị.", "Đổi mật khẩu", MessageBoxButton.OK, MessageBoxImage.Information); }
-        catch (Exception ex) { MessageBox.Show(this, ex.Message, "Đổi mật khẩu", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
 
     // ================== Khôi phục sau sự cố ==================
@@ -125,6 +144,7 @@ public partial class MainWindow : Window
     private void Recover_Click(object sender, RoutedEventArgs e)
     {
         if (_recover == null) return;
+        if (PeerActive()) { Block(_peer!); return; }
         var st = _recover;
         if (!File.Exists(st.PackagePath))
         {
@@ -256,6 +276,7 @@ public partial class MainWindow : Window
         _room.LoadPackage(_pkg, _pkgPath!);
         _room.SubmitWindowMinutes = SelectedWindow();
         _room.ShowScore = ShowScoreBox.IsChecked == true;
+        if (PeerActive()) { _room.Dispose(); _room = null; Block(_peer!); return; }
         try { _room.Open(); }
         catch (Exception ex) { SetupError.Text = "Không mở được cổng mạng (có thể đang có iTest-Server khác chạy): " + ex.Message; _room.Dispose(); _room = null; return; }
         EnterRoom();

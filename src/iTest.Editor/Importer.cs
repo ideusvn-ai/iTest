@@ -187,7 +187,7 @@ public static class Importer
     {
         using var wb = new XLWorkbook();
         var ws = wb.Worksheets.Add("Câu hỏi");
-        string[] h = { "Loại (TN/NDA/DS/TLN/TL)", "Nội dung", "A", "B", "C", "D", "Đáp án", "Điểm" };
+        string[] h = { "Loại (TN/NDA/DS/TL)", "Nội dung", "A", "B", "C", "D", "Đáp án", "Điểm" };
         for (int i = 0; i < h.Length; i++) ws.Cell(1, i + 1).Value = h[i];
         ws.Range(1, 1, 1, h.Length).Style.Font.SetBold().Fill.SetBackgroundColor(XLColor.FromHtml("#CCFBF1"));
         ws.Cell(2, 1).Value = "TN"; ws.Cell(2, 2).Value = "Tập xác định của hàm số y = √(x − 2) là";
@@ -197,8 +197,8 @@ public static class Importer
         ws.Cell(4, 1).Value = "DS"; ws.Cell(4, 2).Value = "Cho hàm số $y = x^2 - 4x + 3$. Xét tính đúng sai của các mệnh đề:";
         ws.Cell(4, 3).Value = "Đồ thị cắt trục tung tại điểm (0; 3)"; ws.Cell(4, 4).Value = "Hàm số đồng biến trên ℝ";
         ws.Cell(4, 5).Value = "Đỉnh parabol là I(2; −1)"; ws.Cell(4, 6).Value = "Phương trình y = 0 vô nghiệm"; ws.Cell(4, 7).Value = "Đ,S,Đ,S"; ws.Cell(4, 8).Value = 1;
-        ws.Cell(5, 1).Value = "TLN"; ws.Cell(5, 2).Value = "Tính giá trị của $\\frac{1}{2} + \\frac{1}{4}$ (viết dạng số thập phân)."; ws.Cell(5, 7).Value = "0,75; 3/4"; ws.Cell(5, 8).Value = 0.5;
-        ws.Cell(6, 1).Value = "TL"; ws.Cell(6, 2).Value = "Giải phương trình $x^2 - 5x + 6 = 0$."; ws.Cell(6, 7).Value = "Δ = 1; x = 2 hoặc x = 3"; ws.Cell(6, 8).Value = 1;
+        // (Loại TLN — trả lời ngắn — vẫn được nhận khi nhập, nhưng không còn trong mẫu.)
+        ws.Cell(5, 1).Value = "TL"; ws.Cell(5, 2).Value = "Giải phương trình $x^2 - 5x + 6 = 0$."; ws.Cell(5, 7).Value = "Δ = 1; x = 2 hoặc x = 3"; ws.Cell(5, 8).Value = 1;
         ws.Columns().AdjustToContents();
         ws.Column(2).Width = 60;
         wb.SaveAs(path);

@@ -26,7 +26,7 @@ public static class QuestionTypes
     {
         QuestionType.MultipleChoice => "Trắc nghiệm 1 đáp án",
         QuestionType.MultiSelect => "Nhiều đáp án đúng",
-        QuestionType.TrueFalse => "Đúng/Sai từng ý",
+        QuestionType.TrueFalse => "Trắc nghiệm đúng/sai",
         QuestionType.ShortAnswer => "Trả lời ngắn",
         _ => "Tự luận"
     };

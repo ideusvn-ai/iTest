@@ -24,7 +24,8 @@ public static class Msg
     public const string Submit = "submit";
     public const string Focus = "focus";          // lost: bool, reason
     public const string AnswerEx = "answerEx";    // AnswerEx: câu nhiều đáp án / Đúng-Sai / trả lời ngắn
-    public const string Cheat = "cheat";          // kind, detail: dấu hiệu gian lận phát hiện trên máy thí sinh
+    public const string Cheat = "cheat";
+    public const string DupServer = "dupServer";  // machine, ip: một máy khác vừa mở iTest-Server trong cùng mạng          // kind, detail: dấu hiệu gian lận phát hiện trên máy thí sinh
     public const string Ping = "ping";            // nhịp tim mỗi 3 giây
     public const string Pong = "pong";            // S → C: trả lời nhịp tim
     // S → C
