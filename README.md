@@ -54,28 +54,92 @@ Bộ cài nằm trong thư mục `dist\`. Có thể mở `iTest.sln` bằng Visu
 - Dòng tiêu đề có chữ `TỰ LUẬN` chuyển sang phần tự luận. Ảnh đặt trong đoạn của câu hỏi được giữ lại.
 
 ### File Excel
-Dùng nút *Tải file Excel mẫu* trong Editor. Cột: `Loại (TN/TL) | Nội dung | A | B | C | D | Đáp án | Điểm`.
+Dùng nút *Tải file Excel mẫu* trong Editor. Cột: `Loại | Nội dung | A | B | C | D | Đáp án | Điểm`.
+
+| Loại | Ý nghĩa | Cột Đáp án |
+|---|---|---|
+| `TN` | Trắc nghiệm 1 đáp án | `B` |
+| `NDA` | Nhiều đáp án đúng (chỉ được điểm khi chọn đúng và đủ) | `A,C` |
+| `DS` | Đúng/Sai 4 ý (A–D là các ý a–d) | `Đ,S,Đ,S` |
+| `TLN` | Trả lời ngắn (máy chấm) | `0,75; 3/4` (nhiều cách viết cách nhau bằng `;`) |
+| `TL` | Tự luận | hướng dẫn chấm |
+
+Câu Đúng/Sai 4 ý tính điểm như đề thi tốt nghiệp THPT: đúng 1 ý 10%, 2 ý 25%, 3 ý 50%, 4 ý 100% điểm câu.
+
+### Công thức toán
+Viết công thức LaTeX giữa hai dấu `$`, ví dụ `Tính $\frac{1}{2}+\sqrt{x^2+1}$`, hoặc bấm **∑ Công thức toán…** trong Editor
+để chọn mẫu (phân số, căn, mũ, tích phân, hệ phương trình…) có xem trước. Công thức hiển thị đẹp trên đề của thí sinh và trong file PDF.
+
+### Xuất đề PDF
+Trong Editor bấm **Xuất đề PDF…**: đề in theo bố cục đề kiểm tra (Sở/Trường, kỳ thi, môn, thời gian, mã đề, số trang),
+chọn in đề gốc hoặc tất cả mã đề đã trộn, kèm trang **đáp án và hướng dẫn chấm** từng mã đề.
+
+## iTest-Server
+- **Mật khẩu quản trị**: lần đầu mở iTest-Server sẽ yêu cầu đặt mật khẩu (lưu dạng băm PBKDF2 tại
+  `C:\ProgramData\iTest-Server\admin.json`); sau đó mỗi lần mở đều phải đăng nhập. Đổi ở nút *Đổi mật khẩu*.
+  Quên mật khẩu: quản trị viên Windows xoá file trên rồi mở lại để đặt mật khẩu mới.
+- **Khôi phục sau sự cố**: trạng thái phòng thi được ghi mỗi 5 giây vào `Documents\iTest-Server\SaoLuu\<phòng>\trang-thai.json`.
+  Nếu máy chủ tắt đột ngột, mở lại iTest-Server sẽ thấy *Khôi phục phòng thi*: các máy thí sinh tự kết nối lại và làm tiếp
+  đúng bài đã lưu; giờ thi được **tạm dừng** cho tới khi giám thị bấm *Tiếp tục*.
+- **Xuất điểm cho SMAS / vnEdu**: sau khi thu bài, bấm *Xuất điểm cho SMAS / vnEdu…* để tạo file điểm theo lớp,
+  hoặc chọn file mẫu nhập điểm tải từ phần mềm quản lý trường — iTest tìm cột Họ và tên / Ngày sinh / Mã học sinh,
+  điền điểm vào cột bạn chọn và báo các học sinh không khớp. Chỉ có điểm phần khách quan (máy chấm).
+  Mẫu của mỗi phần mềm có thể thay đổi theo năm, hãy kiểm tra file trước khi nhập.
+- **Phát hiện gian lận**: máy thí sinh báo về máy chủ (thẻ *GIAN LẬN* trong nhật ký, dấu ⚠ ở cột kỷ luật) khi phát hiện
+  nhiều màn hình, phiên Remote Desktop, máy ảo, phần mềm điều khiển từ xa (TeamViewer, UltraViewer, AnyDesk…);
+  trình duyệt, ứng dụng nhắn tin, trợ lý AI, công cụ chụp màn hình bị đóng khi bắt đầu thi và mỗi 8 giây.
+  Cửa sổ bài thi được chặn quay/chụp màn hình. Máy chỉ báo, giám thị là người quyết định xử lý.
+
+## Thử tải trước kỳ thi
+Tải `iTest-LoadTest.zip` trong mục Artifacts/Releases, chạy trên một máy khác trong cùng mạng:
+```
+iTest-LoadTest.exe --clients 60 --drop 5 --think 3      # tự tìm phòng thi
+iTest-LoadTest.exe --host 192.168.1.10 --clients 120
+```
+Mỗi máy giả lập (LT001…) vào phòng, làm bài ngẫu nhiên mọi loại câu, gửi nhịp tim, mất mạng ngẫu nhiên rồi nối lại
+và nộp khi giám thị thu bài. Màn hình in số máy kết nối, số câu trả lời đã gửi, độ trễ ping trung bình/lớn nhất.
+
+## Kiểm thử tự động
+`dotnet test tests/iTest.Core.Tests` — kiểm tra chia điểm, trộn đề, chấm mọi loại câu, gói `.itz` (mật khẩu, chống sửa),
+bộ gõ TELEX/VNI và kết nối mã hoá. GitHub Actions chạy bộ kiểm thử trước mỗi lần build; lỗi kiểm thử sẽ dừng việc tạo bộ cài.
+
+## Ký số các file .exe
+1. Có chứng thư ký mã (mua chứng thư OV/EV, hoặc dùng Azure Trusted Signing) dạng `.pfx`.
+   Dùng nội bộ trong trường: chạy `installer/new-selfsigned-cert.ps1 -Password "..."` để tạo chứng thư tự ký,
+   rồi cài file `.cer` vào *Trusted Root* và *Trusted Publishers* của các máy phòng thi.
+2. Vào **Settings → Secrets and variables → Actions** của repo, tạo secret `CODESIGN_PFX_BASE64`
+   (nội dung file `.pfx.base64.txt`) và `CODESIGN_PASSWORD`.
+3. Từ lần build sau, các file `iTest.exe`, `iTest-Server.exe`, `iTest-Editor.exe` và 3 bộ cài được ký SHA-256 có dấu thời gian.
+   Không có secret thì bước ký được bỏ qua.
 
 ## Mạng và bảo mật
 - Máy chủ quảng bá phòng thi qua **UDP 47800**; phiên làm bài dùng **TCP 47801**. Bộ cài tự mở các cổng này trong Windows Firewall.
 - Máy thí sinh chỉ thấy phòng thi **cùng workgroup** Windows. Nếu không dò được (mạng chặn broadcast), nhập IP máy chủ ở ô “Hoặc nhập địa chỉ máy chủ”.
+- **Đường truyền LAN được mã hoá**: mỗi kết nối trao đổi khoá ECDH P-256 tạm thời, mọi tin nhắn mã hoá AES-256-GCM,
+  có bộ đếm chống phát lại. Máy nghe lén trong mạng không đọc được đề và bài làm; khung tin bị sửa sẽ bị loại.
+  Phiên bản này chưa xác thực danh tính máy chủ, nên vẫn nên dùng mạng riêng của phòng máy.
 - File `.itz` được mã hoá **AES-256-GCM**, khoá sinh từ mật khẩu bằng PBKDF2-SHA256 (200.000 vòng); file bị sửa sẽ không mở được.
 - Chế độ thi: toàn màn hình, luôn nằm trên cùng, chặn phím Windows, Alt+Tab, Alt+Esc, Ctrl+Esc, Alt+F4 và tạm tắt Task Manager.
   **Ctrl+Alt+Del không thể chặn** bằng phần mềm thường; mọi lần cửa sổ mất tiêu điểm đều được báo về máy chủ.
 - Bài làm được lưu ở máy chủ sau mỗi thao tác, sao lưu mỗi 30 giây vào `Documents\iTest-Server\SaoLuu\`, và lưu tạm trên máy thí sinh.
 
-## Giới hạn của phiên bản 1.0
-- Dữ liệu trong mạng LAN chưa được mã hoá đường truyền (chỉ file bộ đề được mã hoá). Nên dùng mạng riêng của phòng máy.
-- Phần mềm diệt virus có thể cảnh báo hook bàn phím của iTest; nên ký số (code signing) các file .exe trước khi triển khai rộng.
-- Chưa hỗ trợ soạn công thức dạng MathType/Equation; công thức nhập từ Word được giữ ở dạng văn bản.
+## Giới hạn còn lại
+- Công thức MathType/Equation trong file Word nhập vào được giữ ở dạng văn bản; nên soạn lại bằng nút ∑ (LaTeX).
+- Nhập từ Word mới nhận câu 1 đáp án và tự luận; các loại câu mới nhập qua Excel hoặc chọn *Loại câu* trong Editor.
+- Phân tích đề (tỉ lệ đúng từng phương án) hiện áp dụng cho câu trắc nghiệm 1 đáp án.
 
 ## Cấu trúc mã nguồn
 ```
 src/iTest.Core     Mô hình bộ đề, gói .itz (mã hoá), trộn đề, chấm điểm, giao thức mạng, dò phòng, bộ gõ TELEX/VNI
 src/iTest.UI       Giao diện dùng chung (màu, nút, hiệu ứng), gắn bộ gõ vào ô nhập
 src/iTest.Client   Ứng dụng thí sinh (chế độ khoá máy: KioskGuard.cs)
-src/iTest.Server   Bảng điều khiển phòng thi (RoomService.cs), xuất Excel/PDF (Exporter.cs)
-src/iTest.Editor   Soạn đề, bản nháp tự lưu (Drafts.cs), nhập Word/Excel (Importer.cs)
-installer/         Script Inno Setup cho 3 bộ cài
+src/iTest.UI       … và hiển thị công thức LaTeX (RichMath.cs)
+src/iTest.Client   … phát hiện gian lận (AntiCheat.cs)
+src/iTest.Server   Bảng điều khiển phòng thi (RoomService.cs: khôi phục sự cố), xuất Excel/PDF (Exporter.cs),
+                   xuất điểm SMAS/vnEdu (SchoolExport.cs), mật khẩu quản trị (AdminAuth.cs)
+src/iTest.Editor   Soạn đề, bản nháp tự lưu (Drafts.cs), nhập Word/Excel (Importer.cs), xuất đề PDF (ExamPdf.cs)
+tests/             Kiểm thử tự động phần lõi (xUnit)
+tools/             iTest-LoadTest: giả lập nhiều máy thí sinh
+installer/         Script Inno Setup cho 3 bộ cài, script ký số (sign.ps1, new-selfsigned-cert.ps1)
 website/           Trang giới thiệu & tải xuống
 ```
