@@ -60,7 +60,8 @@ Dùng nút *Tải file Excel mẫu* trong Editor. Cột: `Loại | Nội dung | 
 |---|---|---|
 | `TN` | Trắc nghiệm 1 đáp án | `B` |
 | `NDA` | Nhiều đáp án đúng (chỉ được điểm khi chọn đúng và đủ) | `A,C` |
-| `DS` | Trắc nghiệm đúng/sai 4 ý (A–D là các ý a–d) | `Đ,S,Đ,S` |
+| `DS2` | Trắc nghiệm đúng/sai: một mệnh đề, 2 đáp án A. Đúng, B. Sai | `Đ` hoặc `S` |
+| `DS` | Đúng/Sai nhiều ý (A–D là các ý a–d) | `Đ,S,Đ,S` |
 | `TL` | Tự luận | hướng dẫn chấm |
 
 Câu Đúng/Sai 4 ý tính điểm như đề thi tốt nghiệp THPT: đúng 1 ý 10%, 2 ý 25%, 3 ý 50%, 4 ý 100% điểm câu.

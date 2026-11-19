@@ -26,7 +26,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(800) };
     private readonly List<TextBox> _optBoxes = new();
     private TextBox? _mathTarget;
-    private static readonly QuestionType[] ObjectiveTypes = { QuestionType.MultipleChoice, QuestionType.MultiSelect, QuestionType.TrueFalse };
+    private static readonly QuestionType[] ObjectiveTypes = { QuestionType.MultipleChoice, QuestionType.MultiSelect, QuestionType.YesNo, QuestionType.TrueFalse };
     private static readonly CultureInfo Vi = CultureInfo.GetCultureInfo("vi-VN");
     private static readonly string[] MathSymbols = { "√", "²", "³", "≤", "≥", "≠", "±", "×", "÷", "π", "Δ", "∞", "°", "∈", "∉", "⊂", "∩", "∪", "∅", "ℝ", "⇒", "⇔", "α", "β" };
 
@@ -275,6 +275,7 @@ public partial class MainWindow : Window
     {
         "Thí sinh chọn một phương án đúng.",
         "Thí sinh chọn tất cả phương án đúng; chỉ được điểm khi chọn đúng và đủ.",
+        "Một mệnh đề, thí sinh chọn A. Đúng hoặc B. Sai.",
         "Mỗi ý chọn Đúng hoặc Sai. 4 ý: đúng 1 ý được 10%, 2 ý 25%, 3 ý 50%, 4 ý 100% điểm câu."
     };
 
@@ -284,6 +285,7 @@ public partial class MainWindow : Window
         EOptions.Items.Clear();
         _optBoxes.Clear();
         if (!q.Type.HasOptions()) return;
+        if (q.Type == QuestionType.YesNo) { BuildYesNo(q); return; }
         while (q.Options.Count < 4) q.Options.Add("");
         if (q.Type == QuestionType.TrueFalse) while (q.TfKey.Count < q.Options.Count) q.TfKey.Add(null);
         EOptTitle.Text = q.Type switch
@@ -379,7 +381,7 @@ public partial class MainWindow : Window
             int k = _optBoxes.IndexOf(focused);
             switch (Cur.Type)
             {
-                case QuestionType.MultipleChoice: Cur.Correct = k; break;
+                case QuestionType.MultipleChoice: case QuestionType.YesNo: Cur.Correct = k; break;
                 case QuestionType.MultiSelect: if (!Cur.Corrects.Remove(k)) Cur.Corrects.Add(k); Cur.Corrects.Sort(); break;
                 case QuestionType.TrueFalse:
                     while (Cur.TfKey.Count <= k) Cur.TfKey.Add(null);
@@ -407,6 +409,26 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(() => { EText.Focus(); EText.CaretIndex = EText.Text.Length; }, System.Windows.Threading.DispatcherPriority.Input);
     }
 
+    /// <summary>Câu đúng/sai 2 đáp án: chỉ chọn A. Đúng hoặc B. Sai, không cần nhập phương án.</summary>
+    private void BuildYesNo(Question q)
+    {
+        q.Options = QuestionTypes.YesNoOptions.ToList();
+        EOptTitle.Text = "Đáp án đúng";
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        for (int k = 0; k < 2; k++)
+        {
+            int idx = k;
+            var rb = new RadioButton
+            {
+                GroupName = "yesno", Content = $"{(char)('A' + k)}. {q.Options[k]}", FontWeight = FontWeights.SemiBold, FontSize = 15,
+                IsChecked = q.Correct == k, Margin = new Thickness(0, 4, 28, 4)
+            };
+            rb.Checked += (_, _) => { if (_loading || Cur == null) return; Cur.Correct = idx; Changed(); };
+            row.Children.Add(rb);
+        }
+        EOptions.Items.Add(row);
+    }
+
     private void SetTf(int idx, bool v)
     {
         if (Cur == null) return;
@@ -420,6 +442,8 @@ public partial class MainWindow : Window
         if (_loading || Cur == null || EType.SelectedItem is not ComboBoxItem { Tag: QuestionType ty } || ty == Cur.Type) return;
         Cur.Type = ty;
         if (ty == QuestionType.TrueFalse && Cur.TfKey.Count == 0) Cur.TfKey = new List<bool?> { null, null, null, null };
+        if (ty == QuestionType.YesNo) { Cur.Options = QuestionTypes.YesNoOptions.ToList(); if (Cur.Correct > 1) Cur.Correct = -1; }
+        else if (Cur.Options.SequenceEqual(QuestionTypes.YesNoOptions)) { Cur.Options = new List<string> { "", "", "", "" }; Cur.Correct = -1; }
         LoadCurrent();
         Changed();
     }
@@ -701,7 +725,7 @@ public partial class MainWindow : Window
             if (it.Type.HasOptions())
             {
                 slot.Options = it.Options.Take(4).ToList();
-                while (slot.Options.Count < 4) slot.Options.Add("");
+                while (it.Type != QuestionType.YesNo && slot.Options.Count < 4) slot.Options.Add("");
                 slot.Correct = it.Correct;
                 slot.Corrects = it.Corrects.ToList();
                 slot.TfKey = it.TfKey.ToList();

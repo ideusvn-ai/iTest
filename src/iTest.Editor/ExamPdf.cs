@@ -264,6 +264,7 @@ public static class ExamPdf
         switch (q.Type)
         {
             case QuestionType.MultipleChoice:
+            case QuestionType.YesNo:
                 int k = Array.IndexOf(perm, q.Correct);
                 return k < 0 ? "?" : ((char)('A' + k)).ToString();
             case QuestionType.MultiSelect:

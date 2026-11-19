@@ -399,7 +399,7 @@ public partial class MainWindow : Window
                 PaperHost.Children.Add(new TextBlock { Text = $"PHẦN I. TRẮC NGHIỆM ({Fmt(_exam.McTotal)} điểm)", FontWeight = FontWeights.Bold });
                 PaperHost.Children.Add(new TextBlock
                 {
-                    Text = mcs.All(q => q.Type == QuestionType.MultipleChoice) ? "Mỗi câu hỏi chỉ chọn một phương án."
+                    Text = mcs.All(q => q.Type.IsSingleChoice()) ? "Mỗi câu hỏi chỉ chọn một phương án."
                          : "Đọc kỹ yêu cầu từng câu: chọn một phương án, chọn nhiều phương án, chọn Đúng/Sai từng ý hoặc điền câu trả lời ngắn.",
                     FontStyle = FontStyles.Italic, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 12)
                 });
@@ -668,7 +668,7 @@ public partial class MainWindow : Window
     {
         foreach (var q in mcs)
         {
-            if (q.Type != QuestionType.MultipleChoice && q.Type != QuestionType.MultiSelect)
+            if (!q.Type.IsSingleChoice() && q.Type != QuestionType.MultiSelect)
             {
                 // Đúng/Sai và trả lời ngắn: hiện tóm tắt câu trả lời trên phiếu
                 var r2 = new DockPanel { Margin = new Thickness(0, 1, 0, 1) };

@@ -135,6 +135,36 @@ public class ShuffleScoringTests
         Assert.Equal(1, Scoring.GradeObjective(x, l, s).Score);
     }
 
+    [Fact]
+    public void Yes_no_is_never_shuffled_and_graded_as_single_choice()
+    {
+        var x = new ExamSet { Codes = 5 };
+        for (int i = 1; i <= 6; i++)
+            x.Questions.Add(new Question { Id = i, Type = QuestionType.YesNo, Text = $"Mệnh đề {i}", Options = QuestionTypes.YesNoOptions.ToList(), Correct = i % 2, Points = 0.5 });
+        foreach (var l in Shuffler.Build(x))
+        {
+            Assert.All(l.Perm.Values, p => Assert.Equal(new[] { 0, 1 }, p));
+            var ce = Shuffler.ToClient(x, l, new Dictionary<string, byte[]>(), "", "");
+            Assert.All(ce.Questions, q => Assert.Equal(new[] { "Đúng", "Sai" }, q.Options));
+            var s = new AnswerSheet { Code = l.Code };
+            var byId = x.Questions.ToDictionary(q => q.Id);
+            for (int i = 0; i < l.Order.Count; i++) s.Choices[i + 1] = byId[l.Order[i]].Correct;
+            s.Choices[1] = 1 - s.Choices[1];   // sai một câu
+            var r = Scoring.GradeObjective(x, l, s);
+            Assert.Equal(5, r.Right);
+            Assert.Equal(2.5, r.Score);
+        }
+    }
+
+    [Fact]
+    public void Yes_no_missing_answer_is_reported()
+    {
+        var q = new Question { Type = QuestionType.YesNo, Text = "x", Points = 1, Options = QuestionTypes.YesNoOptions.ToList() };
+        Assert.Contains("đáp án Đúng/Sai", q.Missing());
+        q.Correct = 1;
+        Assert.Empty(q.Missing());
+    }
+
     [Theory]
     [InlineData("0,75", true)]
     [InlineData("0.75", true)]

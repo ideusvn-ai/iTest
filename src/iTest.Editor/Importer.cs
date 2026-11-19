@@ -160,6 +160,12 @@ public static class Importer
                         q.TfKey.Add(s is "Đ" or "D" or "ĐÚNG" or "DUNG" or "T" or "TRUE" or "1" ? true : s is "S" or "SAI" or "F" or "FALSE" or "0" ? false : null);
                     }
                     break;
+                case QuestionType.YesNo:
+                    q.Options.AddRange(QuestionTypes.YesNoOptions);
+                    var yn = ans.Trim().ToUpperInvariant();
+                    q.Correct = yn is "A" or "Đ" or "D" or "ĐÚNG" or "DUNG" or "T" or "TRUE" or "1" ? 0
+                              : yn is "B" or "S" or "SAI" or "F" or "FALSE" or "0" ? 1 : -1;
+                    break;
                 case QuestionType.ShortAnswer:
                     q.ShortKey = ans;
                     break;
@@ -176,6 +182,7 @@ public static class Importer
     private static QuestionType ParseType(string t) => t switch
     {
         "NDA" or "NHIEU" or "NHIỀU" or "NHIEUDAPAN" or "NHIỀUĐÁPÁN" => QuestionType.MultiSelect,
+        "DS2" or "ĐS2" or "DUNGSAI2" => QuestionType.YesNo,
         "DS" or "ĐS" or "DUNGSAI" or "ĐÚNGSAI" or "Đ/S" or "D/S" => QuestionType.TrueFalse,
         "TLN" or "TRALOINGAN" or "TRẢLỜINGẮN" => QuestionType.ShortAnswer,
         _ when t.StartsWith("TL") || t.Contains("TỰ") => QuestionType.Essay,
@@ -187,7 +194,7 @@ public static class Importer
     {
         using var wb = new XLWorkbook();
         var ws = wb.Worksheets.Add("Câu hỏi");
-        string[] h = { "Loại (TN/NDA/DS/TL)", "Nội dung", "A", "B", "C", "D", "Đáp án", "Điểm" };
+        string[] h = { "Loại (TN/NDA/DS2/DS/TL)", "Nội dung", "A", "B", "C", "D", "Đáp án", "Điểm" };
         for (int i = 0; i < h.Length; i++) ws.Cell(1, i + 1).Value = h[i];
         ws.Range(1, 1, 1, h.Length).Style.Font.SetBold().Fill.SetBackgroundColor(XLColor.FromHtml("#CCFBF1"));
         ws.Cell(2, 1).Value = "TN"; ws.Cell(2, 2).Value = "Tập xác định của hàm số y = √(x − 2) là";
@@ -198,7 +205,8 @@ public static class Importer
         ws.Cell(4, 3).Value = "Đồ thị cắt trục tung tại điểm (0; 3)"; ws.Cell(4, 4).Value = "Hàm số đồng biến trên ℝ";
         ws.Cell(4, 5).Value = "Đỉnh parabol là I(2; −1)"; ws.Cell(4, 6).Value = "Phương trình y = 0 vô nghiệm"; ws.Cell(4, 7).Value = "Đ,S,Đ,S"; ws.Cell(4, 8).Value = 1;
         // (Loại TLN — trả lời ngắn — vẫn được nhận khi nhập, nhưng không còn trong mẫu.)
-        ws.Cell(5, 1).Value = "TL"; ws.Cell(5, 2).Value = "Giải phương trình $x^2 - 5x + 6 = 0$."; ws.Cell(5, 7).Value = "Δ = 1; x = 2 hoặc x = 3"; ws.Cell(5, 8).Value = 1;
+        ws.Cell(5, 1).Value = "DS2"; ws.Cell(5, 2).Value = "Số 0 là số tự nhiên."; ws.Cell(5, 7).Value = "Đ"; ws.Cell(5, 8).Value = 0.25;
+        ws.Cell(6, 1).Value = "TL"; ws.Cell(6, 2).Value = "Giải phương trình $x^2 - 5x + 6 = 0$."; ws.Cell(6, 7).Value = "Δ = 1; x = 2 hoặc x = 3"; ws.Cell(6, 8).Value = 1;
         ws.Columns().AdjustToContents();
         ws.Column(2).Width = 60;
         wb.SaveAs(path);

@@ -36,7 +36,7 @@ public static class Shuffler
             foreach (var q in exam.Questions.Where(q => q.Type.HasOptions()))
             {
                 var p = Enumerable.Range(0, q.Options.Count).ToArray();
-                if (mix) Shuffle(p, rnd);
+                if (mix && q.Type != QuestionType.YesNo) Shuffle(p, rnd);   // Đúng luôn là A, Sai luôn là B
                 layout.Perm[q.Id] = p;
             }
             result.Add(layout);
@@ -117,6 +117,7 @@ public static class Scoring
         switch (q.Type)
         {
             case QuestionType.MultipleChoice:
+            case QuestionType.YesNo:
                 if (!sheet.Choices.TryGetValue(no, out var shown) || shown < 0 || shown >= perm.Length) return (0, false, false);
                 return perm[shown] == q.Correct ? (q.Points, true, true) : (0, false, true);
 
@@ -177,7 +178,7 @@ public static class Scoring
 
     public static List<ItemStat> Analyze(ExamSet exam, IReadOnlyList<CodeLayout> layouts, IEnumerable<AnswerSheet> sheets)
     {
-        var mc = exam.Questions.Where(q => q.Type == QuestionType.MultipleChoice).ToList();
+        var mc = exam.Questions.Where(q => q.Type.IsSingleChoice()).ToList();
         var stats = mc.ToDictionary(q => q.Id, q => (answered: 0, correct: 0, counts: new int[q.Options.Count]));
         var byCode = layouts.ToDictionary(l => l.Code);
         var byId = exam.Questions.ToDictionary(q => q.Id);

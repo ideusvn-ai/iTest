@@ -14,19 +14,25 @@ public enum QuestionType
     /// <summary>Đúng/Sai theo từng ý (a, b, c, d).</summary>
     TrueFalse = 3,
     /// <summary>Trả lời ngắn (điền số hoặc cụm từ).</summary>
-    ShortAnswer = 4
+    ShortAnswer = 4,
+    /// <summary>Trắc nghiệm đúng/sai: một mệnh đề, 2 phương án cố định A. Đúng, B. Sai.</summary>
+    YesNo = 5
 }
 
 public static class QuestionTypes
 {
     public static bool IsObjective(this QuestionType t) => t != QuestionType.Essay;
-    public static bool HasOptions(this QuestionType t) => t is QuestionType.MultipleChoice or QuestionType.MultiSelect or QuestionType.TrueFalse;
+    public static bool HasOptions(this QuestionType t) => t is QuestionType.MultipleChoice or QuestionType.MultiSelect or QuestionType.TrueFalse or QuestionType.YesNo;
+    /// <summary>Loại chọn một phương án (chấm như trắc nghiệm 1 đáp án).</summary>
+    public static bool IsSingleChoice(this QuestionType t) => t is QuestionType.MultipleChoice or QuestionType.YesNo;
+    public static readonly string[] YesNoOptions = { "Đúng", "Sai" };
 
     public static string Label(this QuestionType t) => t switch
     {
         QuestionType.MultipleChoice => "Trắc nghiệm 1 đáp án",
         QuestionType.MultiSelect => "Nhiều đáp án đúng",
-        QuestionType.TrueFalse => "Trắc nghiệm đúng/sai",
+        QuestionType.TrueFalse => "Đúng/Sai nhiều ý (a, b, c, d)",
+        QuestionType.YesNo => "Trắc nghiệm đúng/sai",
         QuestionType.ShortAnswer => "Trả lời ngắn",
         _ => "Tự luận"
     };
@@ -65,6 +71,9 @@ public sealed class Question
         if (string.IsNullOrWhiteSpace(Text)) m.Add("nội dung");
         switch (Type)
         {
+            case QuestionType.YesNo:
+                if (Correct is not (0 or 1)) m.Add("đáp án Đúng/Sai");
+                break;
             case QuestionType.MultipleChoice:
                 if (Options.Count < 2 || Options.Any(string.IsNullOrWhiteSpace)) m.Add("phương án");
                 if (Correct < 0 || Correct >= Options.Count) m.Add("đáp án đúng");
