@@ -40,6 +40,11 @@ public partial class MainWindow : Window
     private readonly List<WrapPanel> _mathBars = new();
     private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer _essayFlush = new() { Interval = TimeSpan.FromSeconds(2) };
+    private readonly DispatcherTimer _heartbeat = new() { Interval = TimeSpan.FromSeconds(3) };
+    private readonly DispatcherTimer _saveDebounce = new() { Interval = TimeSpan.FromSeconds(1) };
+    private DateTime _lastRx = DateTime.Now;
+    private static readonly Brush TimerNormal = Frozen(0x0F, 0x17, 0x2A), TimerLow = Frozen(0xB9, 0x1C, 0x1C), Ink = Frozen(0x1E, 0x3A, 0x8A);
+    private static Brush Frozen(byte r, byte g, byte b) { var x = new SolidColorBrush(Color.FromRgb(r, g, b)); x.Freeze(); return x; }
     private readonly HashSet<int> _dirtyEssays = new();
     private DateTime _submittedAt;
     private readonly string _localSave = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "iTest", "autosave.json");
@@ -70,6 +75,15 @@ public partial class MainWindow : Window
 
         _clock.Tick += (_, _) => OnClock();
         _essayFlush.Tick += (_, _) => FlushEssays();
+        _saveDebounce.Tick += (_, _) => { _saveDebounce.Stop(); SaveLocalNow(); };
+        _heartbeat.Tick += (_, _) =>
+        {
+            if (_conn == null) return;
+            _conn.Send(Msg.Ping);
+            // Không nhận được gì từ máy chủ quá 12 giây khi đang thi: chủ động ngắt để kết nối lại.
+            if (_examRunning && !_submitted && (DateTime.Now - _lastRx).TotalSeconds > 12) _conn.Close();
+        };
+        _heartbeat.Start();
         KioskGuard.Blocked += what => Dispatcher.BeginInvoke(() => _conn?.Send(Msg.Focus, new { lost = true, reason = "Bấm " + what }));
         Deactivated += OnDeactivated;
         Closing += OnClosing;
@@ -131,7 +145,8 @@ public partial class MainWindow : Window
     private void AttachConnection(Connection c)
     {
         _conn = c;
-        c.Received += (_, m) => Dispatcher.BeginInvoke(() => OnMessage(m));
+        _lastRx = DateTime.Now;
+        c.Received += (_, m) => { _lastRx = DateTime.Now; if (m.Str("t") != Msg.Pong) Dispatcher.BeginInvoke(() => OnMessage(m)); };
         c.Closed += _ => Dispatcher.BeginInvoke(OnDisconnected);
         c.Start();
     }
@@ -578,7 +593,7 @@ public partial class MainWindow : Window
 
     private void RefreshAnswers()
     {
-        var ink = new SolidColorBrush(Color.FromRgb(0x1E, 0x3A, 0x8A));
+        var ink = Ink;
         foreach (var (no, circles) in _optionCircles)
             for (int k = 0; k < circles.Count; k++)
             {
@@ -625,7 +640,8 @@ public partial class MainWindow : Window
     private void UpdateClock()
     {
         TimerText.Text = $"{_secondsLeft / 60:00}:{_secondsLeft % 60:00}";
-        TimerBox.Background = _secondsLeft < 300 ? new SolidColorBrush(Color.FromRgb(0xB9, 0x1C, 0x1C)) : new SolidColorBrush(Color.FromRgb(0x0F, 0x17, 0x2A));
+        var tb = _secondsLeft < 300 ? TimerLow : TimerNormal;
+        if (TimerBox.Background != tb) TimerBox.Background = tb;
         int wait = _secondsLeft - _submitWindow * 60;
         SubmitBtn.IsEnabled = wait <= 0 && !_submitted;
         SubmitBtn.Content = wait <= 0 ? "Nộp bài" : $"Nộp bài · mở sau {wait / 60:00}:{wait % 60:00}";
@@ -749,8 +765,12 @@ public partial class MainWindow : Window
     }
 
     // ---- Lưu cục bộ (phòng mất kết nối / mất điện) ----
-    private void SaveLocal()
+    /// <summary>Gom các lần lưu (gõ phím liên tục) lại, ghi đĩa tối đa mỗi giây một lần.</summary>
+    private void SaveLocal() { _saveDebounce.Stop(); _saveDebounce.Start(); }
+
+    private void SaveLocalNow()
     {
+        if (_submitted) return;
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_localSave)!);

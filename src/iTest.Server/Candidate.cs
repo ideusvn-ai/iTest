@@ -15,6 +15,7 @@ public sealed class Candidate : INotifyPropertyChanged
     public void RefreshAll() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
 
     public Connection? Conn { get; set; }
+    public DateTime LastSeen { get; set; } = DateTime.Now;
     public AnswerSheet Sheet { get; } = new();
     public int Index { get; set; }
     public int ExtraSeconds { get; set; }
@@ -55,24 +56,34 @@ public sealed class Candidate : INotifyPropertyChanged
 
     public string Discipline => RevokedAt != null ? "Thu bài " + RevokedAt : WarnedAt != null ? "⚑ Nhắc " + WarnedAt : "—";
 
-    public Brush StatusBrush => new SolidColorBrush(Status switch
-    {
-        CandStatus.Doing => Color.FromRgb(0x25, 0x63, 0xEB),
-        CandStatus.Done => Color.FromRgb(0x16, 0xA3, 0x4A),
-        CandStatus.Lost => Color.FromRgb(0xDC, 0x26, 0x26),
-        CandStatus.Moving => Color.FromRgb(0x08, 0x91, 0xB2),
-        CandStatus.Revoked => Color.FromRgb(0x7C, 0x3A, 0xED),
-        _ => Color.FromRgb(0x64, 0x74, 0x8B)
-    });
+    private static Brush B(byte r, byte g, byte b) { var x = new SolidColorBrush(Color.FromRgb(r, g, b)); x.Freeze(); return x; }
+    private static readonly Brush SDoing = B(0x25, 0x63, 0xEB), SDone = B(0x16, 0xA3, 0x4A), SLost = B(0xDC, 0x26, 0x26),
+        SMoving = B(0x08, 0x91, 0xB2), SRevoked = B(0x7C, 0x3A, 0xED), SIdle = B(0x64, 0x74, 0x8B);
+    private static readonly Brush RDone = B(0xF0, 0xFD, 0xF4), RLost = B(0xFE, 0xF2, 0xF2), RMoving = B(0xEC, 0xFE, 0xFF),
+        RRevoked = B(0xF5, 0xF3, 0xFF), RWhite = B(0xFF, 0xFF, 0xFF);
+    private static readonly Brush PDoing = B(0xDB, 0xEA, 0xFE), PDone = B(0xDC, 0xFC, 0xE7), PLost = B(0xFE, 0xE2, 0xE2),
+        PMoving = B(0xCF, 0xFA, 0xFE), PRevoked = B(0xED, 0xE9, 0xFE), PIdle = B(0xF1, 0xF5, 0xF9);
 
-    public Brush RowBrush => new SolidColorBrush(Status switch
+    public Brush StatusBrush => Status switch
     {
-        CandStatus.Done => Color.FromRgb(0xF0, 0xFD, 0xF4),
-        CandStatus.Lost => Color.FromRgb(0xFE, 0xF2, 0xF2),
-        CandStatus.Moving => Color.FromRgb(0xEC, 0xFE, 0xFF),
-        CandStatus.Revoked => Color.FromRgb(0xF5, 0xF3, 0xFF),
-        _ => Colors.White
-    });
+        CandStatus.Doing => SDoing, CandStatus.Done => SDone, CandStatus.Lost => SLost,
+        CandStatus.Moving => SMoving, CandStatus.Revoked => SRevoked, _ => SIdle
+    };
+
+    /// <summary>Nền "viên thuốc" trạng thái.</summary>
+    public Brush PillBrush => Status switch
+    {
+        CandStatus.Doing => PDoing, CandStatus.Done => PDone, CandStatus.Lost => PLost,
+        CandStatus.Moving => PMoving, CandStatus.Revoked => PRevoked, _ => PIdle
+    };
+
+    public Brush RowBrush => Status switch
+    {
+        CandStatus.Done => RDone, CandStatus.Lost => RLost, CandStatus.Moving => RMoving, CandStatus.Revoked => RRevoked, _ => RWhite
+    };
+
+    /// <summary>Chỉ báo thay đổi tiến độ (nhẹ hơn RefreshAll).</summary>
+    public void NotifyProgress() => On(nameof(StatusText));
 
     public bool IsActive => Status is CandStatus.Doing or CandStatus.Lost or CandStatus.Moving;
 }

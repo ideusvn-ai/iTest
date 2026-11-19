@@ -48,8 +48,13 @@ public sealed class ExamSet
     public int Codes { get; set; } = 4;
     public bool AllowDocuments { get; set; }
     public int McCount { get; set; }
-    public double McPoints { get; set; }
+    /// <summary>Tổng điểm phần trắc nghiệm (người soạn nhập).</summary>
+    public double McTotal { get; set; }
     public int EssayCount { get; set; }
+    /// <summary>Tổng điểm phần tự luận (người soạn nhập).</summary>
+    public double EssayTotal { get; set; }
+    /// <summary>Điểm bình quân mỗi câu trắc nghiệm (tham khảo, tự tính).</summary>
+    public double McPoints { get; set; }
     public double EssayPoints { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.Now;
     public List<Question> Questions { get; set; } = new();
@@ -59,38 +64,64 @@ public sealed class ExamSet
     [JsonIgnore] public double TotalPoints => Math.Round(Questions.Sum(q => q.Points), 2);
     [JsonIgnore] public bool IsComplete => Questions.Count > 0 && Questions.All(q => q.Missing().Count == 0);
 
-    /// <summary>Tạo khung câu hỏi trống theo thiết lập.</summary>
+    /// <summary>
+    /// Chia đều <paramref name="total"/> điểm cho <paramref name="count"/> câu, làm tròn 2 chữ số;
+    /// phần dư dồn vào các câu cuối để tổng luôn đúng bằng <paramref name="total"/>.
+    /// </summary>
+    public static List<double> Split(double total, int count)
+    {
+        var list = new List<double>();
+        if (count <= 0) return list;
+        long cents = (long)Math.Round(total * 100);
+        long baseCents = cents / count;
+        long rem = cents - baseCents * count;
+        for (int i = 0; i < count; i++) list.Add((baseCents + (i >= count - rem ? 1 : 0)) / 100.0);
+        return list;
+    }
+
+    /// <summary>Chia lại điểm cho một phần theo tổng điểm của phần đó.</summary>
+    public void Distribute(QuestionType type)
+    {
+        var qs = Questions.Where(q => q.Type == type).ToList();
+        var pts = Split(type == QuestionType.MultipleChoice ? McTotal : EssayTotal, qs.Count);
+        for (int i = 0; i < qs.Count; i++) qs[i].Points = pts[i];
+        if (type == QuestionType.MultipleChoice) McPoints = qs.Count > 0 ? Math.Round(McTotal / qs.Count, 4) : 0;
+        else EssayPoints = qs.Count > 0 ? Math.Round(EssayTotal / qs.Count, 4) : 0;
+    }
+
+    /// <summary>Bản nháp cũ chỉ có điểm mỗi câu: suy ra tổng điểm từng phần.</summary>
+    public void EnsureTotals()
+    {
+        if (McTotal <= 0 && McCount > 0) McTotal = Math.Round(McQuestions.Sum(q => q.Points), 2);
+        if (EssayTotal <= 0 && EssayCount > 0) EssayTotal = Math.Round(EssayQuestions.Sum(q => q.Points), 2);
+    }
+
+    /// <summary>Tạo khung câu hỏi trống theo thiết lập và tự chia điểm.</summary>
     public void BuildSkeleton()
     {
         Questions.Clear();
         int id = 1;
-        for (int i = 0; i < McCount; i++) Questions.Add(new Question { Id = id++, Type = QuestionType.MultipleChoice, Points = McPoints });
-        for (int i = 0; i < EssayCount; i++) Questions.Add(new Question { Id = id++, Type = QuestionType.Essay, Points = EssayPoints, Options = new() });
+        for (int i = 0; i < McCount; i++) Questions.Add(new Question { Id = id++, Type = QuestionType.MultipleChoice });
+        for (int i = 0; i < EssayCount; i++) Questions.Add(new Question { Id = id++, Type = QuestionType.Essay, Options = new() });
+        Distribute(QuestionType.MultipleChoice);
+        Distribute(QuestionType.Essay);
     }
 
-    /// <summary>Đổi số câu / điểm nhưng giữ các câu đã soạn.</summary>
-    public void Resize(int mc, double mcPts, int es, double esPts)
+    /// <summary>Đổi số câu / tổng điểm từng phần nhưng giữ các câu đã soạn; điểm từng câu được chia lại nếu phần đó thay đổi.</summary>
+    public void Resize(int mc, double mcTotal, int es, double esTotal)
     {
         var oldMc = McQuestions.ToList();
         var oldEs = EssayQuestions.ToList();
-        bool mcPtsChanged = Math.Abs(mcPts - McPoints) > 1e-9;
-        bool esPtsChanged = Math.Abs(esPts - EssayPoints) > 1e-9;
+        bool mcChanged = mc != oldMc.Count || Math.Abs(mcTotal - McTotal) > 1e-9;
+        bool esChanged = es != oldEs.Count || Math.Abs(esTotal - EssayTotal) > 1e-9;
         var list = new List<Question>();
-        for (int i = 0; i < mc; i++)
-        {
-            var q = i < oldMc.Count ? oldMc[i] : new Question { Type = QuestionType.MultipleChoice, Points = mcPts };
-            if (mcPtsChanged) q.Points = mcPts;
-            list.Add(q);
-        }
-        for (int i = 0; i < es; i++)
-        {
-            var q = i < oldEs.Count ? oldEs[i] : new Question { Type = QuestionType.Essay, Points = esPts, Options = new() };
-            if (esPtsChanged) q.Points = esPts;
-            list.Add(q);
-        }
+        for (int i = 0; i < mc; i++) list.Add(i < oldMc.Count ? oldMc[i] : new Question { Type = QuestionType.MultipleChoice });
+        for (int i = 0; i < es; i++) list.Add(i < oldEs.Count ? oldEs[i] : new Question { Type = QuestionType.Essay, Options = new() });
         for (int i = 0; i < list.Count; i++) list[i].Id = i + 1;
-        McCount = mc; McPoints = mcPts; EssayCount = es; EssayPoints = esPts;
+        McCount = mc; McTotal = mcTotal; EssayCount = es; EssayTotal = esTotal;
         Questions = list;
+        if (mcChanged) Distribute(QuestionType.MultipleChoice);
+        if (esChanged) Distribute(QuestionType.Essay);
     }
 }
 

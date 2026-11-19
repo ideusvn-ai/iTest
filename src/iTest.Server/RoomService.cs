@@ -92,6 +92,14 @@ public sealed class RoomService : IDisposable
         Task.Delay(800).ContinueWith(_ => _ui.Invoke(Dispose));
     }
 
+    /// <summary>Dùng khi thoát ứng dụng: báo các máy thí sinh thoát rồi đóng ngay.</summary>
+    public void ReleaseAllAndDispose()
+    {
+        var sends = Candidates.Where(c => c.Conn != null).Select(c => c.Conn!.SendAsync(Msg.Release)).ToArray();
+        try { Task.WaitAll(sends, 800); } catch { }
+        Dispose();
+    }
+
     public void Dispose()
     {
         _tick.Stop();
@@ -122,8 +130,12 @@ public sealed class RoomService : IDisposable
     private void OnMessage(Connection conn, JsonObject m)
     {
         var cand = ByConn(conn);
+        if (cand != null) cand.LastSeen = DateTime.Now;
         switch (m.Str("t"))
         {
+            case Msg.Ping:
+                conn.Send(Msg.Pong);
+                return;
             case Msg.Hello:
                 conn.Send(Msg.Welcome, new { room = Room, proctor = Proctor, exam = $"{Exam.ExamName} – {Exam.Subject}" });
                 _helloMachine[conn] = m.Str("machine");
@@ -134,13 +146,13 @@ public sealed class RoomService : IDisposable
             case Msg.Answer:
                 if (cand == null || !cand.IsActive) break;
                 cand.Sheet.Choices[m.Int("no")] = m.Int("choice");
-                cand.RefreshAll();
-                break;
+                cand.NotifyProgress();
+                return;
             case Msg.Essay:
                 if (cand == null || !cand.IsActive) break;
                 cand.Sheet.Essays[m.Int("no")] = m.Str("text");
-                cand.RefreshAll();
-                break;
+                cand.NotifyProgress();
+                return;
             case Msg.Submit:
                 if (cand == null || cand.Status != CandStatus.Doing) break;
                 FinishCandidate(cand, m.Bool("auto") ? "tự động nộp bài khi hết giờ" : "đã nộp bài");
@@ -160,6 +172,14 @@ public sealed class RoomService : IDisposable
         info.Sbd = info.Sbd.Trim();
         var machine = _helloMachine.TryGetValue(conn, out var mm) ? mm : conn.RemoteAddress;
         var existing = Candidates.FirstOrDefault(c => string.Equals(c.Sbd, info.Sbd, StringComparison.OrdinalIgnoreCase)) ?? ByConn(conn);
+        // Cùng một máy kết nối lại (mạng chập chờn, máy chủ chưa kịp phát hiện) thì cho nhận lại phiên cũ.
+        if (existing != null && existing.Conn != null && existing.Conn != conn && string.Equals(existing.Machine, machine, StringComparison.OrdinalIgnoreCase))
+        {
+            var old = existing.Conn;
+            existing.Conn = null;
+            old.Close();
+            if (existing.Status == CandStatus.Doing) existing.Status = CandStatus.Lost;
+        }
         if (existing != null && existing.Conn != null && existing.Conn != conn && existing.Status != CandStatus.Lost && !existing.MoveApproved
             && existing.Status != CandStatus.Moving)
         {
@@ -210,6 +230,7 @@ public sealed class RoomService : IDisposable
         else if (cand.Status == CandStatus.Done)
             SendResult(cand);
         cand.Left = Fmt(LeftOf(cand));
+        cand.LastSeen = DateTime.Now;
     }
 
     private void OnClosed(Connection conn)
@@ -279,6 +300,9 @@ public sealed class RoomService : IDisposable
             }
             if (Candidates.Count > 0 && Candidates.All(c => !c.IsActive) && SecondsLeft == 0) EndExam("Hết giờ · đã thu bài tất cả thí sinh");
         }
+        // Máy không gửi nhịp tim quá 10 giây (mất điện, rút dây mạng…) được coi là mất kết nối.
+        foreach (var c in Candidates.Where(c => c.Conn != null && (DateTime.Now - c.LastSeen).TotalSeconds > 10).ToList())
+            c.Conn!.Close();
         foreach (var c in Candidates)
         {
             c.Left = Phase == Phase.Collected ? "—" : Fmt(LeftOf(c)) + (c.ExtraSeconds > 0 && Phase == Phase.Running ? "*" : "");

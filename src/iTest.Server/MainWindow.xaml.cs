@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using ITest.Core;
 using ITest.UI;
 using Microsoft.Win32;
@@ -134,7 +135,7 @@ public partial class MainWindow : Window
         _room.ShowScore = ShowScoreBox.IsChecked == true;
         try { _room.Open(); }
         catch (Exception ex) { SetupError.Text = "Không mở được cổng mạng (có thể đang có iTest-Server khác chạy): " + ex.Message; _room.Dispose(); _room = null; return; }
-        _room.Changed += Refresh;
+        _room.Changed += ScheduleRefresh;
         _view = CollectionViewSource.GetDefaultView(_room.Candidates);
         _view.Filter = FilterCandidate;
         Table.ItemsSource = _view;
@@ -157,6 +158,17 @@ public partial class MainWindow : Window
     }
 
     // ================== Làm mới giao diện ==================
+    // Mọi thay đổi được gộp lại và vẽ lại tối đa một lần mỗi khung hình (ưu tiên thấp) để tránh giật khi nhiều máy cùng gửi dữ liệu.
+    private bool _refreshPending;
+    private string _discSig = "", _countSig = "";
+
+    private void ScheduleRefresh()
+    {
+        if (_refreshPending) return;
+        _refreshPending = true;
+        Dispatcher.BeginInvoke(() => { _refreshPending = false; Refresh(); }, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
     private void Refresh()
     {
         if (_room == null) return;
@@ -176,8 +188,10 @@ public partial class MainWindow : Window
         CollectBtn.IsEnabled = r.CanCollectAll;
         int wait = r.SecondsLeft - r.SubmitWindowMinutes * 60;
         CollectBtn.Content = r.Phase == Phase.Collected ? "✓ Đã thu bài" : r.Phase == Phase.Running && wait > 0 ? $"Thu bài · mở sau {RoomService.Fmt(wait)}" : "Thu bài tất cả";
-        CloseBtn.IsEnabled = r.Exported;
-        CloseBtn.ToolTip = r.Exported ? "Đóng phòng và mở khoá các máy thí sinh" : "Chỉ đóng được sau khi đã xuất kết quả";
+        bool canClose = r.Phase == Phase.Open || r.Exported;
+        CloseBtn.IsEnabled = canClose;
+        CloseBtn.ToolTip = r.Phase == Phase.Open ? "Đóng phòng khi chưa phát đề; các máy thí sinh sẽ tự thoát"
+            : r.Exported ? "Đóng phòng và mở khoá các máy thí sinh" : "Chỉ đóng được sau khi đã xuất kết quả";
         SwapBtn.Visibility = r.Phase == Phase.Open ? Visibility.Visible : Visibility.Collapsed;
         WindowBox.IsEnabled = r.Phase == Phase.Open;
 
@@ -185,8 +199,10 @@ public partial class MainWindow : Window
         ListTitle.Text = $"Danh sách thí sinh · {total} máy";
         FeedTitle.Text = $"Hoạt động trực tiếp · {r.Feed.Count} sự kiện";
         var disc = r.Candidates.Where(c => c.WarnedAt != null || c.RevokedAt != null).ToList();
-        DiscList.ItemsSource = disc;
+        var sig = string.Join("|", disc.Select(c => c.Sbd + c.Discipline));
+        if (sig != _discSig) { _discSig = sig; DiscList.ItemsSource = disc; }
         DiscTitle.Text = $"ĐÃ NHẮC NHỞ / THU BÀI · {disc.Count}";
+        EmptyHint.Visibility = total == 0 ? Visibility.Visible : Visibility.Collapsed;
         UpdateFilterCounts();
         UpdateSelection();
 
@@ -219,6 +235,9 @@ public partial class MainWindow : Window
     private void UpdateFilterCounts()
     {
         if (_room == null) return;
+        var sig = string.Join(",", _room.Candidates.Select(c => (int)c.Status));
+        if (sig == _countSig) return;
+        _countSig = sig;
         foreach (ComboBoxItem it in FilterBox.Items)
         {
             var key = (string)it.Tag;
@@ -226,7 +245,8 @@ public partial class MainWindow : Window
             int n = key == "all" ? _room.Candidates.Count : _room.Candidates.Count(c => c.Status.ToString() == key);
             it.Content = $"{label} ({n})";
         }
-        _view?.Refresh();
+        // Chỉ lọc lại danh sách khi đang bật bộ lọc trạng thái (trạng thái vừa thay đổi)
+        if ((FilterBox.SelectedItem as ComboBoxItem)?.Tag as string != "all") _view?.Refresh();
     }
 
     private bool FilterCandidate(object o)
@@ -371,7 +391,7 @@ public partial class MainWindow : Window
     private void Window_Changed(object sender, SelectionChangedEventArgs e) { if (_room != null) { _room.SubmitWindowMinutes = SelectedWindow(); Refresh(); } }
     private void ShowScore_Changed(object sender, RoutedEventArgs e) { if (_room != null) _room.ShowScore = ShowScoreBox.IsChecked == true; }
 
-    private void Export_Click(object sender, RoutedEventArgs e)
+    private async void Export_Click(object sender, RoutedEventArgs e)
     {
         if (_room == null || _room.Phase != Phase.Collected) return;
         var dlg = new SaveFileDialog
@@ -385,20 +405,26 @@ public partial class MainWindow : Window
         {
             ExportBtn.IsEnabled = false;
             ExportBtn.Content = "Đang đóng gói kết quả…";
-            Exporter.ExportZip(_room, dlg.FileName);
+            var room = _room;
+            var path = dlg.FileName;
+            Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
+            await Task.Run(() => Exporter.ExportZip(room, path));
             _room.Exported = true;
             _room.Log("XUẤT FILE", "", $"Đã xuất {Path.GetFileName(dlg.FileName)} · bảng điểm, bài tự luận, biên bản, phân tích đề");
             MessageBox.Show(this, "Đã xuất kết quả:\n" + dlg.FileName, "Xuất kết quả", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex) { MessageBox.Show(this, "Lỗi khi xuất kết quả: " + ex.Message, "Xuất kết quả", MessageBoxButton.OK, MessageBoxImage.Error); }
-        finally { Refresh(); }
+        finally { Mouse.OverrideCursor = null; Refresh(); }
     }
 
     private void CloseRoom_Click(object sender, RoutedEventArgs e)
     {
-        if (_room == null || !_room.Exported) return;
-        if (MessageBox.Show(this, "Đóng phòng thi và mở khoá tất cả máy thí sinh?", "Đóng phòng", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
-        _room.Changed -= Refresh;
+        if (_room == null || !(_room.Phase == Phase.Open || _room.Exported)) return;
+        var msg = _room.Phase == Phase.Open
+            ? $"Đóng phòng khi chưa phát đề?\n\n{_room.Candidates.Count} máy thí sinh đang trong phòng chờ sẽ tự thoát iTest."
+            : "Đóng phòng thi và mở khoá tất cả máy thí sinh?";
+        if (MessageBox.Show(this, msg, "Đóng phòng", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        _room.Changed -= ScheduleRefresh;
         _room.Close();
         _room = null; _sel = null; _pkg = null; _pkgPath = null;
         FileBox.Visibility = Visibility.Collapsed;
@@ -420,7 +446,7 @@ public partial class MainWindow : Window
             MessageBox.Show(this, "Chưa xuất kết quả. Bài làm đã được sao lưu tại:\n" + _room.BackupDir + "\n\nVẫn thoát?", "iTest-Server", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
         { e.Cancel = true; return; }
         _room.Backup();
-        _room.Dispose();
+        _room.ReleaseAllAndDispose();
     }
 }
 

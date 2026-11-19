@@ -22,7 +22,8 @@ public static class Msg
     public const string Essay = "essay";          // no, text
     public const string Submit = "submit";
     public const string Focus = "focus";          // lost: bool, reason
-    public const string Ping = "ping";
+    public const string Ping = "ping";            // nhịp tim mỗi 3 giây
+    public const string Pong = "pong";            // S → C: trả lời nhịp tim
     // S → C
     public const string Welcome = "welcome";      // room, proctor, department, school
     public const string Registered = "registered";
@@ -76,7 +77,7 @@ public sealed class Connection : IDisposable
     public static async Task<Connection> ConnectAsync(string host, int port, CancellationToken ct = default)
     {
         var c = new TcpClient();
-        await c.ConnectAsync(host, port, ct);
+        await c.ConnectAsync(host, port, ct).ConfigureAwait(false);
         return new Connection(c);
     }
 
@@ -89,11 +90,11 @@ public sealed class Connection : IDisposable
         {
             while (true)
             {
-                await ReadExact(lenBuf, 4);
+                await ReadExact(lenBuf, 4).ConfigureAwait(false);
                 int len = BitConverter.ToInt32(lenBuf, 0);
                 if (len <= 0 || len > 64 * 1024 * 1024) throw new InvalidDataException("Khung tin không hợp lệ");
                 var buf = new byte[len];
-                await ReadExact(buf, len);
+                await ReadExact(buf, len).ConfigureAwait(false);
                 var node = JsonNode.Parse(buf) as JsonObject;
                 if (node != null) Received?.Invoke(this, node);
             }
@@ -107,7 +108,7 @@ public sealed class Connection : IDisposable
         int read = 0;
         while (read < count)
         {
-            int n = await _stream.ReadAsync(buf.AsMemory(read, count - read));
+            int n = await _stream.ReadAsync(buf.AsMemory(read, count - read)).ConfigureAwait(false);
             if (n == 0) throw new EndOfStreamException();
             read += n;
         }
@@ -118,12 +119,12 @@ public sealed class Connection : IDisposable
         var obj = payload == null ? new JsonObject() : (JsonSerializer.SerializeToNode(payload, ExamPackage.Json) as JsonObject ?? new JsonObject());
         obj["t"] = type;
         var bytes = Encoding.UTF8.GetBytes(obj.ToJsonString());
-        await _sendLock.WaitAsync();
+        await _sendLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            await _stream.WriteAsync(BitConverter.GetBytes(bytes.Length));
-            await _stream.WriteAsync(bytes);
-            await _stream.FlushAsync();
+            await _stream.WriteAsync(BitConverter.GetBytes(bytes.Length)).ConfigureAwait(false);
+            await _stream.WriteAsync(bytes).ConfigureAwait(false);
+            await _stream.FlushAsync().ConfigureAwait(false);
         }
         catch { Close(); }
         finally { _sendLock.Release(); }

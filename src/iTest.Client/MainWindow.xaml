@@ -13,9 +13,7 @@
         <Border x:Name="TopBar" Background="#0F172A" Padding="20,10">
             <DockPanel>
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
-                    <Border Width="28" Height="28" CornerRadius="7" Background="{StaticResource Primary}">
-                        <TextBlock Text="iT" Foreground="White" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
+                    <Image Source="app.ico" Width="28" Height="28" RenderOptions.BitmapScalingMode="HighQuality"/>
                     <TextBlock Text="iTest" Foreground="White" FontWeight="Bold" FontSize="16" Margin="10,0,0,0" VerticalAlignment="Center"/>
                     <TextBlock Text="Ứng dụng thí sinh" Foreground="#CBD5E1" Margin="10,0,0,0" VerticalAlignment="Center"/>
                 </StackPanel>
@@ -32,7 +30,9 @@
                             <Ellipse.RenderTransform><ScaleTransform/></Ellipse.RenderTransform>
                         </Ellipse>
                         <Ellipse Width="56" Height="56" Fill="{StaticResource PrimarySoft}"/>
-                        <TextBlock Text="📡" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center" FontFamily="Segoe UI Emoji"/>
+                        <Path Data="M12,10 A2,2 0 1 1 12,14 A2,2 0 1 1 12,10 M16.2,7.8 A6,6 0 0 1 16.2,16.2 M7.8,16.2 A6,6 0 0 1 7.8,7.8 M19,5 A10,10 0 0 1 19,19 M5,19 A10,10 0 0 1 5,5"
+                              Stroke="{StaticResource Primary}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="28" Height="28" Stretch="Uniform"
+                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Grid>
                     <TextBlock Text="Tìm phòng thi" Style="{StaticResource H1}" HorizontalAlignment="Center" Margin="0,12,0,4"/>
                     <TextBlock x:Name="ScanText" Style="{StaticResource Hint}" HorizontalAlignment="Center" TextAlignment="Center"/>

@@ -56,13 +56,25 @@ public partial class MainWindow : Window
 
     private void UpdateFormTotal()
     {
-        if (FTotal == null || FNMc == null || FPMc == null || FNEs == null || FPEs == null || FTotalBox == null) return;
-        double total = Int(FNMc.Text) * Num(FPMc.Text) + Int(FNEs.Text) * Num(FPEs.Text);
+        if (FTotal == null || FNMc == null || FPMc == null || FNEs == null || FPEs == null || FTotalBox == null || FPerMc == null || FPerEs == null) return;
+        int nMc = Int(FNMc.Text), nEs = Int(FNEs.Text);
+        double tMc = nMc > 0 ? Num(FPMc.Text) : 0, tEs = nEs > 0 ? Num(FPEs.Text) : 0;
+        FPerMc.Text = PerHint(nMc, tMc);
+        FPerEs.Text = PerHint(nEs, tEs);
+        double total = tMc + tEs;
         bool ok = Math.Abs(total - 10) < 1e-6;
-        FTotal.Text = $"{Int(FNMc.Text)} × {FPMc.Text} + {Int(FNEs.Text)} × {FPEs.Text} = {F(total)} điểm" +
+        FTotal.Text = $"Tổng điểm bộ đề: {F(tMc)} + {F(tEs)} = {F(total)} điểm" +
                       (ok ? "  ✓" : total < 10 ? $"  · thiếu {F(10 - total)} điểm" : $"  · thừa {F(total - 10)} điểm");
         FTotalBox.Background = new SolidColorBrush(ok ? Color.FromRgb(0xF0, 0xFD, 0xF4) : Color.FromRgb(0xFE, 0xF2, 0xF2));
         FTotal.Foreground = new SolidColorBrush(ok ? Color.FromRgb(0x16, 0x65, 0x34) : Color.FromRgb(0x99, 0x1B, 0x1B));
+    }
+
+    private static string PerHint(int n, double total)
+    {
+        if (n <= 0) return "Không có phần này trong bộ đề.";
+        var pts = ExamSet.Split(total, n);
+        double min = pts.Min(), max = pts.Max();
+        return min == max ? $"Hệ thống tự chia: {F(min)} điểm/câu" : $"Hệ thống tự chia: {F(min)}–{F(max)} điểm/câu";
     }
 
     private void Pass_Changed(object sender, RoutedEventArgs e)
@@ -95,11 +107,18 @@ public partial class MainWindow : Window
         var x = d.Exam;
         x.ExamName = FExam.Text.Trim(); x.Subject = FSubject.Text.Trim(); x.Author = FAuthor.Text.Trim(); x.Unit = FUnit.Text.Trim();
         x.SchoolYear = FYear.Text.Trim(); x.AllowDocuments = FDocs.SelectedIndex == 1; x.Minutes = Int(FMinutes.Text); x.Codes = Int(FCodes.Text);
+        int nMc = Int(FNMc.Text), nEs = Int(FNEs.Text);
+        double tMc = nMc > 0 ? Num(FPMc.Text) : 0, tEs = nEs > 0 ? Num(FPEs.Text) : 0;
+        if (nMc > 0 && tMc <= 0) { FError.Text = "Vui lòng nhập tổng điểm phần trắc nghiệm."; return; }
+        if (nEs > 0 && tEs <= 0) { FError.Text = "Vui lòng nhập tổng điểm phần tự luận."; return; }
         if (_editingMeta && _draft != null)
-            x.Resize(Int(FNMc.Text), Num(FPMc.Text), Int(FNEs.Text), Num(FPEs.Text));
+        {
+            x.EnsureTotals();
+            x.Resize(nMc, tMc, nEs, tEs);
+        }
         else
         {
-            x.McCount = Int(FNMc.Text); x.McPoints = Num(FPMc.Text); x.EssayCount = Int(FNEs.Text); x.EssayPoints = Num(FPEs.Text);
+            x.McCount = nMc; x.McTotal = tMc; x.EssayCount = nEs; x.EssayTotal = tEs;
             x.BuildSkeleton();
         }
         d.Locked = FPass.Password.Length > 0;
@@ -117,8 +136,9 @@ public partial class MainWindow : Window
         FExam.Text = x?.ExamName ?? ""; FSubject.Text = x?.Subject ?? ""; FAuthor.Text = x?.Author ?? FAuthor.Text; FUnit.Text = x?.Unit ?? FUnit.Text;
         FYear.Text = x?.SchoolYear ?? "2026 – 2027"; FDocs.SelectedIndex = x?.AllowDocuments == true ? 1 : 0;
         FMinutes.Text = (x?.Minutes ?? 45).ToString(); FCodes.Text = (x?.Codes ?? 4).ToString();
-        FNMc.Text = (x?.McCount ?? 36).ToString(); FPMc.Text = F(x?.McPoints ?? 0.25);
-        FNEs.Text = (x?.EssayCount ?? 4).ToString(); FPEs.Text = F(x?.EssayPoints ?? 0.25);
+        x?.EnsureTotals();
+        FNMc.Text = (x?.McCount ?? 36).ToString(); FPMc.Text = F(x?.McTotal ?? 9);
+        FNEs.Text = (x?.EssayCount ?? 4).ToString(); FPEs.Text = F(x?.EssayTotal ?? 1);
         FPass.Password = d?.Password ?? ""; FPass2.Password = d?.Password ?? "";
         Pass_Changed(this, new RoutedEventArgs());
         UpdateFormTotal();
@@ -203,7 +223,7 @@ public partial class MainWindow : Window
 
     private string? AskPassword()
     {
-        var w = new Window { Owner = this, Title = "Mật khẩu bộ đề", Width = 380, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize };
+        var w = new Window { Owner = this, Style = (Style)FindResource("DialogWindow"), Title = "Mật khẩu bộ đề", Width = 380, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize };
         var p = new StackPanel { Margin = new Thickness(18) };
         var pb = new PasswordBox();
         var ok = new Button { Content = "Mở", IsDefault = true, Margin = new Thickness(0, 12, 0, 0), Style = (Style)FindResource("BtnTeal") };
@@ -336,7 +356,7 @@ public partial class MainWindow : Window
         _packed = false;
         (QList.SelectedItem as QuestionRow)?.Refresh();
         UpdateMissing();
-        RefreshSide();
+        ScheduleSide();
         SaveText.Text = "Đang lưu bản nháp…";
         _saveTimer.Stop(); _saveTimer.Start();
     }
@@ -381,6 +401,15 @@ public partial class MainWindow : Window
         Close();
     }
 
+    private bool _sidePending;
+    /// <summary>Gom các lần gõ phím liên tục, chỉ tính lại khung bên phải khi rảnh.</summary>
+    private void ScheduleSide()
+    {
+        if (_sidePending) return;
+        _sidePending = true;
+        Dispatcher.BeginInvoke(() => { _sidePending = false; RefreshSide(); }, DispatcherPriority.Background);
+    }
+
     private void SaveNow()
     {
         if (_draft == null) return;
@@ -406,7 +435,8 @@ public partial class MainWindow : Window
         TotalBar.Foreground = new SolidColorBrush(ok10 ? Color.FromRgb(0x16, 0xA3, 0x4A) : total > 10 ? Color.FromRgb(0xDC, 0x26, 0x26) : Color.FromRgb(0xF5, 0x9E, 0x0B));
         TotalMsg.Text = ok10 ? "Tổng điểm hợp lệ." : total < 10 ? $"Chưa đủ 10 điểm · còn thiếu {F(10 - total)} điểm." : $"Vượt quá 10 điểm · thừa {F(total - 10)} điểm.";
         TotalMsgBox.Background = new SolidColorBrush(ok10 ? Color.FromRgb(0xF0, 0xFD, 0xF4) : Color.FromRgb(0xFE, 0xF2, 0xF2));
-        SumParts.Text = $"Trắc nghiệm: {F(x.McQuestions.Sum(q => q.Points))}đ   ·   Tự luận: {F(x.EssayQuestions.Sum(q => q.Points))}đ";
+        x.EnsureTotals();
+        SumParts.Text = $"Trắc nghiệm: {F(x.McQuestions.Sum(q => q.Points))}/{F(x.McTotal)}đ   ·   Tự luận: {F(x.EssayQuestions.Sum(q => q.Points))}/{F(x.EssayTotal)}đ";
         DoneCount.Text = $"đủ {done}/{x.Questions.Count}";
         DoneBar.Value = x.Questions.Count == 0 ? 0 : (double)done / x.Questions.Count;
         Check1.Text = (done == x.Questions.Count ? "✓ " : "! ") + $"Đủ thông tin {done}/{x.Questions.Count} câu";
@@ -421,6 +451,7 @@ public partial class MainWindow : Window
         {
             new { K = "Người soạn", V = x.Author }, new { K = "Đơn vị", V = x.Unit }, new { K = "Kỳ thi", V = x.ExamName },
             new { K = "Môn thi", V = x.Subject }, new { K = "Năm học", V = x.SchoolYear }, new { K = "Thời gian", V = $"{x.Minutes} phút" },
+            new { K = "Cấu trúc", V = $"{x.McCount} TN ({F(x.McTotal)}đ) + {x.EssayCount} TL ({F(x.EssayTotal)}đ)" },
             new { K = "Số mã đề", V = x.Codes.ToString() }, new { K = "Tài liệu", V = x.AllowDocuments ? "Được sử dụng" : "Không được sử dụng" },
             new { K = "Mật khẩu", V = _draft.Locked ? "Có (đã xác nhận)" : "Không" }
         };
@@ -443,7 +474,9 @@ public partial class MainWindow : Window
     private void ResetPoints_Click(object sender, RoutedEventArgs e)
     {
         if (_draft == null) return;
-        foreach (var q in _draft.Exam.Questions) q.Points = q.Type == QuestionType.MultipleChoice ? _draft.Exam.McPoints : _draft.Exam.EssayPoints;
+        _draft.Exam.EnsureTotals();
+        _draft.Exam.Distribute(QuestionType.MultipleChoice);
+        _draft.Exam.Distribute(QuestionType.Essay);
         foreach (var r in _rows) r.Refresh();
         LoadCurrent();
         Changed();

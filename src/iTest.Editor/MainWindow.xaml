@@ -18,9 +18,7 @@
                     <Button x:Name="PackBtn" Content="Đóng gói bộ câu hỏi" Style="{StaticResource BtnTeal}" Click="Pack_Click"/>
                 </WrapPanel>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Width="30" Height="30" CornerRadius="7" Background="{StaticResource Teal}">
-                        <TextBlock Text="iT" Foreground="White" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
+                    <Image Source="app.ico" Width="32" Height="32" RenderOptions.BitmapScalingMode="HighQuality"/>
                     <StackPanel Margin="10,0,0,0">
                         <TextBlock x:Name="TitleText" Text="iTest-Editor" FontWeight="Bold" FontSize="15"/>
                         <TextBlock x:Name="SaveText" Text="Soạn bộ đề chuẩn cho iTest-Server" Style="{StaticResource Hint}"/>
@@ -50,16 +48,22 @@
                         </UniformGrid>
                         <UniformGrid Columns="2" Margin="0,12,0,0">
                             <GroupBox Header="Phần I · Trắc nghiệm" Margin="0,0,6,0" Padding="8">
+                                <StackPanel>
                                 <UniformGrid Columns="2">
                                     <StackPanel Margin="0,0,4,0"><TextBlock Text="Số câu" Style="{StaticResource FieldLabel}"/><TextBox x:Name="FNMc" Text="36" TextChanged="Total_Changed"/></StackPanel>
-                                    <StackPanel Margin="4,0,0,0"><TextBlock Text="Điểm mỗi câu" Style="{StaticResource FieldLabel}"/><TextBox x:Name="FPMc" Text="0,25" TextChanged="Total_Changed"/></StackPanel>
+                                    <StackPanel Margin="4,0,0,0"><TextBlock Text="Tổng điểm phần" Style="{StaticResource FieldLabel}"/><TextBox x:Name="FPMc" Text="9" TextChanged="Total_Changed"/></StackPanel>
                                 </UniformGrid>
+                                <TextBlock x:Name="FPerMc" Style="{StaticResource Hint}" Margin="0,8,0,0"/>
+                                </StackPanel>
                             </GroupBox>
                             <GroupBox Header="Phần II · Tự luận" Margin="6,0,0,0" Padding="8">
+                                <StackPanel>
                                 <UniformGrid Columns="2">
                                     <StackPanel Margin="0,0,4,0"><TextBlock Text="Số câu" Style="{StaticResource FieldLabel}"/><TextBox x:Name="FNEs" Text="4" TextChanged="Total_Changed"/></StackPanel>
-                                    <StackPanel Margin="4,0,0,0"><TextBlock Text="Điểm mỗi câu" Style="{StaticResource FieldLabel}"/><TextBox x:Name="FPEs" Text="0,25" TextChanged="Total_Changed"/></StackPanel>
+                                    <StackPanel Margin="4,0,0,0"><TextBlock Text="Tổng điểm phần" Style="{StaticResource FieldLabel}"/><TextBox x:Name="FPEs" Text="1" TextChanged="Total_Changed"/></StackPanel>
                                 </UniformGrid>
+                                <TextBlock x:Name="FPerEs" Style="{StaticResource Hint}" Margin="0,8,0,0"/>
+                                </StackPanel>
                             </GroupBox>
                         </UniformGrid>
                         <Border x:Name="FTotalBox" CornerRadius="10" Padding="12,8" Margin="0,12,0,0">
@@ -71,7 +75,7 @@
                                 <TextBlock x:Name="FPassMsg" Style="{StaticResource Hint}" Margin="0,4,0,0"/></StackPanel>
                         </UniformGrid>
                         <TextBlock x:Name="FMetaNote" Style="{StaticResource Hint}" Foreground="#9A3412" Margin="0,10,0,0" Visibility="Collapsed"
-                                   Text="Giảm số câu sẽ xoá các câu ở cuối phần đó. Đổi điểm mỗi câu sẽ chia lại điểm cho cả phần."/>
+                                   Text="Giảm số câu sẽ xoá các câu ở cuối phần đó. Đổi số câu hoặc tổng điểm của một phần sẽ chia lại điểm cho các câu trong phần đó."/>
                         <TextBlock x:Name="FError" Foreground="{StaticResource Bad}" TextWrapping="Wrap" Margin="0,10,0,0"/>
                         <DockPanel Margin="0,14,0,0">
                             <Button x:Name="FCancel" Content="Huỷ" DockPanel.Dock="Left" MinWidth="90" Margin="0,0,10,0" Visibility="Collapsed" Click="CancelMeta_Click"/>
@@ -190,7 +194,7 @@
                             <ProgressBar x:Name="TotalBar" Height="8" Maximum="10"/>
                             <Border x:Name="TotalMsgBox" CornerRadius="8" Padding="10,6" Margin="0,8,0,0"><TextBlock x:Name="TotalMsg" FontWeight="SemiBold" TextWrapping="Wrap"/></Border>
                             <TextBlock x:Name="SumParts" Style="{StaticResource Hint}" Margin="0,8,0,0"/>
-                            <Button Content="Chia lại điểm theo thiết lập" Margin="0,10,0,0" Click="ResetPoints_Click"/>
+                            <Button Content="Chia đều lại điểm theo tổng từng phần" Margin="0,10,0,0" Click="ResetPoints_Click"/>
                         </StackPanel>
                     </Border>
                     <Border Style="{StaticResource CardBorder}" Margin="0,14,0,0">

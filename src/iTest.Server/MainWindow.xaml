@@ -9,9 +9,7 @@
             <Border Style="{StaticResource CardBorder}" Width="620" Margin="24" VerticalAlignment="Center" HorizontalAlignment="Center" Padding="28">
                 <StackPanel>
                     <StackPanel Orientation="Horizontal">
-                        <Border Width="38" Height="38" CornerRadius="9" Background="{StaticResource Primary}">
-                            <TextBlock Text="iT" Foreground="White" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
+                        <Image Source="app.ico" Width="44" Height="44" RenderOptions.BitmapScalingMode="HighQuality"/>
                         <StackPanel Margin="12,0,0,0">
                             <TextBlock Text="Mở phòng thi" Style="{StaticResource H1}"/>
                             <TextBlock x:Name="HostLine" Style="{StaticResource Hint}"/>
@@ -81,6 +79,7 @@
                         <Button x:Name="CollectBtn" Content="Thu bài tất cả" Style="{StaticResource BtnPrimary}" Margin="0,0,8,0" Click="Collect_Click"/>
                         <Button x:Name="CloseBtn" Content="Đóng phòng" Style="{StaticResource BtnDanger}" Click="CloseRoom_Click"/>
                     </WrapPanel>
+                    <Image Source="app.ico" Width="36" Height="36" DockPanel.Dock="Left" Margin="0,0,14,0" VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality"/>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock x:Name="PhaseText" FontSize="11" FontWeight="Bold" Foreground="#166534"/>
                         <TextBlock x:Name="ExamTitle" FontSize="17" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
@@ -110,7 +109,13 @@
                                           SelectionMode="Single" RowHeight="34" BorderThickness="0" Background="White" SelectionChanged="Table_SelectionChanged"
                                           CanUserAddRows="False">
                                     <DataGrid.RowStyle>
-                                        <Style TargetType="DataGridRow"><Setter Property="Background" Value="{Binding RowBrush}"/></Style>
+                                        <Style TargetType="DataGridRow">
+                                            <Setter Property="Background" Value="{Binding RowBrush}"/>
+                                            <Style.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#F1F5F9"/></Trigger>
+                                                <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="{StaticResource PrimarySoft}"/></Trigger>
+                                            </Style.Triggers>
+                                        </Style>
                                     </DataGrid.RowStyle>
                                     <DataGrid.Columns>
                                         <DataGridTemplateColumn Header="MÁY" Width="110">
@@ -133,13 +138,17 @@
                                         <DataGridTemplateColumn Header="TRẠNG THÁI" Width="200">
                                             <DataGridTemplateColumn.CellTemplate>
                                                 <DataTemplate>
-                                                    <TextBlock Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                                    <Border Background="{Binding PillBrush}" CornerRadius="10" Padding="10,3" HorizontalAlignment="Left" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" FontWeight="SemiBold" FontSize="12"/>
+                                                    </Border>
                                                 </DataTemplate>
                                             </DataGridTemplateColumn.CellTemplate>
                                         </DataGridTemplateColumn>
                                         <DataGridTextColumn Header="KỶ LUẬT" Binding="{Binding Discipline}" Width="100"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
+                                <TextBlock x:Name="EmptyHint" Text="Đang chờ máy thí sinh kết nối vào phòng…" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           Foreground="{StaticResource Muted}" FontSize="14" Panel.ZIndex="2" IsHitTestVisible="False"/>
                                 <ListBox x:Name="Tiles" Visibility="Collapsed" BorderThickness="0" SelectionChanged="Tiles_SelectionChanged"
                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                     <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
