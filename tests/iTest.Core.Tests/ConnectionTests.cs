@@ -77,6 +77,49 @@ public class ConnectionTests
     }
 
     [Fact]
+    public async Task Matching_room_pin_communicates()
+    {
+        var l = new TcpListener(IPAddress.Loopback, 0);
+        l.Start();
+        var port = ((IPEndPoint)l.LocalEndpoint).Port;
+        var accept = l.AcceptTcpClientAsync();
+        var client = await Connection.ConnectAsync("127.0.0.1", port, "1234");
+        var server = new Connection(await accept, isServer: true, "1234");
+        try
+        {
+            var got = new TaskCompletionSource<JsonObject>();
+            server.Received += (_, m) => got.TrySetResult(m);
+            server.Start(); client.Start();
+            await client.SendAsync(Msg.Hello, new { machine = "PC1" });
+            var m = await got.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal("PC1", m.Str("machine"));
+        }
+        finally { server.Dispose(); client.Dispose(); l.Stop(); }
+    }
+
+    [Fact]
+    public async Task Wrong_room_pin_cannot_communicate()
+    {
+        var l = new TcpListener(IPAddress.Loopback, 0);
+        l.Start();
+        var port = ((IPEndPoint)l.LocalEndpoint).Port;
+        var accept = l.AcceptTcpClientAsync();
+        var client = await Connection.ConnectAsync("127.0.0.1", port, "1234");
+        var server = new Connection(await accept, isServer: true, "9999");
+        try
+        {
+            var got = new TaskCompletionSource<JsonObject>();
+            server.Received += (_, m) => got.TrySetResult(m);
+            server.Start(); client.Start();
+            await client.SendAsync(Msg.Hello, new { machine = "PC1" });
+            // Mã phòng khác nhau → khoá phiên khác nhau → máy chủ không giải mã được, không nhận được tin.
+            await Task.WhenAny(got.Task, Task.Delay(3000));
+            Assert.False(got.Task.IsCompleted);
+        }
+        finally { server.Dispose(); client.Dispose(); l.Stop(); }
+    }
+
+    [Fact]
     public async Task Plain_text_client_is_dropped()
     {
         var l = new TcpListener(IPAddress.Loopback, 0);

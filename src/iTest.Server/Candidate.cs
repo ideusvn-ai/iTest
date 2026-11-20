@@ -43,6 +43,8 @@ public sealed class Candidate : INotifyPropertyChanged
     public int Answered => Sheet.AnsweredCount;
     /// <summary>Số dấu hiệu gian lận máy thí sinh đã báo.</summary>
     public int CheatCount { get; set; }
+    /// <summary>Token phiên do máy chủ cấp; chỉ máy thí sinh giữ đúng token mới được giành lại phiên khi kết nối lại.</summary>
+    public string Token { get; set; } = "";
 
     public string StatusText => Status switch
     {

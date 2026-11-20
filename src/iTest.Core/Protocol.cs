@@ -84,6 +84,7 @@ public sealed class Connection : IDisposable
     private readonly System.Threading.Channels.Channel<(byte[] plain, TaskCompletionSource done)> _outbox =
         System.Threading.Channels.Channel.CreateUnbounded<(byte[], TaskCompletionSource)>(new() { SingleReader = false });
     private readonly bool _isServer;
+    private readonly string _secret;
     private readonly TaskCompletionSource<bool> _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private AesGcm? _aes;
     private long _sendCounter;
@@ -93,20 +94,22 @@ public sealed class Connection : IDisposable
     public event Action<Connection>? Closed;
     private int _closed;
 
-    public Connection(TcpClient client, bool isServer)
+    /// <param name="secret">Bí mật phòng thi (mã phòng) trộn vào khoá phiên; hai bên phải trùng mới giải mã được cho nhau.</param>
+    public Connection(TcpClient client, bool isServer, string secret = "")
     {
         _client = client;
         _client.NoDelay = true;
         _isServer = isServer;
+        _secret = secret ?? "";
         _stream = client.GetStream();
         RemoteAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "?";
     }
 
-    public static async Task<Connection> ConnectAsync(string host, int port, CancellationToken ct = default)
+    public static async Task<Connection> ConnectAsync(string host, int port, string secret = "", CancellationToken ct = default)
     {
         var c = new TcpClient();
         await c.ConnectAsync(host, port, ct).ConfigureAwait(false);
-        return new Connection(c, isServer: false);
+        return new Connection(c, isServer: false, secret);
     }
 
     public void Start() => _ = Task.Run(RunAsync);
@@ -171,7 +174,10 @@ public sealed class Connection : IDisposable
 
         using var other = ECDiffieHellman.Create();
         other.ImportSubjectPublicKeyInfo(peer.AsSpan(4), out _);
-        var key = ecdh.DeriveKeyFromHash(other.PublicKey, HashAlgorithmName.SHA256, null, "iTest-session-v1"u8.ToArray());
+        // Khoá phiên = SHA-256(bí mật ECDH ‖ "iTest-session-v1:" ‖ mã phòng). Mã phòng sai thì hai bên ra khoá khác nhau,
+        // không giải mã được cho nhau — chặn máy chủ giả và máy thí sinh không có mã phòng.
+        var info = Encoding.UTF8.GetBytes("iTest-session-v1:" + _secret);
+        var key = ecdh.DeriveKeyFromHash(other.PublicKey, HashAlgorithmName.SHA256, null, info);
         _aes = new AesGcm(key, 16);
     }
 

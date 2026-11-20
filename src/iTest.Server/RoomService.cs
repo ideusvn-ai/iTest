@@ -19,6 +19,7 @@ public sealed class RoomState
     public string School { get; set; } = "";
     public string Room { get; set; } = "";
     public string Proctor { get; set; } = "";
+    public string RoomPin { get; set; } = "";
     public string PackagePath { get; set; } = "";
     public string BackupDir { get; set; } = "";
     public Phase Phase { get; set; }
@@ -47,6 +48,7 @@ public sealed class CandidateState
     public bool MoveApproved { get; set; }
     public int TotalQuestions { get; set; }
     public int CheatCount { get; set; }
+    public string Token { get; set; } = "";
     public string Machine { get; set; } = "";
     public string Ip { get; set; } = "";
 }
@@ -59,6 +61,8 @@ public sealed class RoomService : IDisposable
     private BeaconSender? _beacon;
     /// <summary>Mã phiên quảng bá của phòng đang mở (để nhận ra gói tin của chính mình).</summary>
     public string? ServerId => _beacon?.ServerId;
+    /// <summary>Mã phòng thi (4 chữ số) giám thị đọc cho thí sinh nhập; trộn vào khoá phiên để chống máy chủ giả.</summary>
+    public string RoomPin { get; private set; } = "";
     private readonly DispatcherTimer _tick;
     private readonly List<Connection> _pending = new();
 
@@ -109,6 +113,7 @@ public sealed class RoomService : IDisposable
     {
         Phase = Phase.Open;
         SecondsLeft = Exam.Minutes * 60;
+        if (RoomPin.Length == 0) RoomPin = Random.Shared.Next(0, 10000).ToString("0000");
         BackupDir = existingBackupDir ?? Path.Combine(BackupRoot, $"{Safe(Room)}_{DateTime.Now:yyyyMMdd_HHmm}");
         Directory.CreateDirectory(BackupDir);
         _listener = new TcpListener(IPAddress.Any, Ports.Session);
@@ -157,7 +162,7 @@ public sealed class RoomService : IDisposable
         {
             TcpClient tcp;
             try { tcp = await l.AcceptTcpClientAsync(); } catch { return; }
-            var conn = new Connection(tcp, isServer: true);
+            var conn = new Connection(tcp, isServer: true, RoomPin);
             conn.Received += (c, m) => _ui.BeginInvoke(() => OnMessage(c, m));
             conn.Closed += c => _ui.BeginInvoke(() => OnClosed(c));
             _ui.Invoke(() => _pending.Add(conn));
@@ -185,6 +190,7 @@ public sealed class RoomService : IDisposable
             case Msg.Hello:
                 conn.Send(Msg.Welcome, new { room = Room, proctor = Proctor, exam = $"{Exam.ExamName} – {Exam.Subject}" });
                 _helloMachine[conn] = m.Str("machine");
+                _helloToken[conn] = m.Str("token");
                 break;
             case Msg.Register:
                 OnRegister(conn, m.As<CandidateInfo>() ?? new CandidateInfo());
@@ -230,14 +236,19 @@ public sealed class RoomService : IDisposable
     }
 
     private readonly Dictionary<Connection, string> _helloMachine = new();
+    private readonly Dictionary<Connection, string> _helloToken = new();
 
     private void OnRegister(Connection conn, CandidateInfo info)
     {
         info.Sbd = info.Sbd.Trim();
         var machine = _helloMachine.TryGetValue(conn, out var mm) ? mm : conn.RemoteAddress;
+        var clientToken = _helloToken.TryGetValue(conn, out var tk) ? tk : "";
         var existing = Candidates.FirstOrDefault(c => string.Equals(c.Sbd, info.Sbd, StringComparison.OrdinalIgnoreCase)) ?? ByConn(conn);
-        // Cùng một máy kết nối lại (mạng chập chờn, máy chủ chưa kịp phát hiện) thì cho nhận lại phiên cũ.
-        if (existing != null && existing.Conn != null && existing.Conn != conn && string.Equals(existing.Machine, machine, StringComparison.OrdinalIgnoreCase))
+        // Chỉ cho giành lại phiên khi: đúng token phiên (chính máy thí sinh đó, rớt mạng rồi vào lại),
+        // hoặc phiên cũ đã mất kết nối / được giám thị duyệt chuyển máy. Không còn dựa vào tên máy (có thể giả mạo).
+        bool tokenOk = existing != null && existing.Token.Length > 0 && existing.Token == clientToken;
+        if (existing != null && existing.Conn != null && existing.Conn != conn
+            && (tokenOk || existing.Status is CandStatus.Lost or CandStatus.Moving || existing.MoveApproved))
         {
             var old = existing.Conn;
             existing.Conn = null;
@@ -284,7 +295,8 @@ public sealed class RoomService : IDisposable
             Candidates.Add(cand);
             Log("THAM GIA", cand.Machine, $"vừa tham gia phòng thi · {info.FullName} · SBD {info.Sbd}");
         }
-        conn.Send(Msg.Registered);
+        if (cand.Token.Length == 0) cand.Token = Guid.NewGuid().ToString("N");
+        conn.Send(Msg.Registered, new { token = cand.Token });
         if (Phase == Phase.Running && cand.Status == CandStatus.Doing)
         {
             // Máy đang thi kết nối lại: gửi lại đề và bài làm đã lưu.
@@ -307,6 +319,7 @@ public sealed class RoomService : IDisposable
     {
         _pending.Remove(conn);
         _helloMachine.Remove(conn);
+        _helloToken.Remove(conn);
         var cand = ByConn(conn);
         if (cand == null) return;
         cand.Conn = null;
@@ -597,13 +610,13 @@ public sealed class RoomService : IDisposable
             if (BackupDir.Length == 0) return;
             var st = new RoomState
             {
-                Department = Department, School = School, Room = Room, Proctor = Proctor, PackagePath = PackagePath, BackupDir = BackupDir,
+                Department = Department, School = School, Room = Room, Proctor = Proctor, RoomPin = RoomPin, PackagePath = PackagePath, BackupDir = BackupDir,
                 Phase = Phase, SecondsLeft = SecondsLeft, SubmitWindowMinutes = SubmitWindowMinutes, ShowScore = ShowScore,
                 StartedAt = StartedAt, EndedAt = EndedAt, Exported = Exported, Closed = closed, SavedAt = DateTime.Now,
                 Candidates = Candidates.Select(c => new CandidateState
                 {
                     Sheet = c.Sheet, Status = c.Status, Index = c.Index, ExtraSeconds = c.ExtraSeconds, WarnedAt = c.WarnedAt, RevokedAt = c.RevokedAt,
-                    MoveApproved = c.MoveApproved, TotalQuestions = c.TotalQuestions, CheatCount = c.CheatCount, Machine = c.Machine, Ip = c.Ip
+                    MoveApproved = c.MoveApproved, TotalQuestions = c.TotalQuestions, CheatCount = c.CheatCount, Token = c.Token, Machine = c.Machine, Ip = c.Ip
                 }).ToList()
             };
             json = JsonSerializer.Serialize(st, ExamPackage.Json);
@@ -668,7 +681,7 @@ public sealed class RoomService : IDisposable
     /// </summary>
     public void Restore(RoomState st)
     {
-        Department = st.Department; School = st.School; Room = st.Room; Proctor = st.Proctor;
+        Department = st.Department; School = st.School; Room = st.Room; Proctor = st.Proctor; RoomPin = st.RoomPin;
         SubmitWindowMinutes = st.SubmitWindowMinutes; ShowScore = st.ShowScore;
         foreach (var cs in st.Candidates.OrderBy(c => c.Index))
         {
@@ -677,7 +690,7 @@ public sealed class RoomService : IDisposable
             var c = new Candidate
             {
                 Index = Candidates.Count, ExtraSeconds = cs.ExtraSeconds, WarnedAt = cs.WarnedAt, RevokedAt = cs.RevokedAt,
-                MoveApproved = cs.MoveApproved, TotalQuestions = cs.TotalQuestions, CheatCount = cs.CheatCount, Ip = cs.Ip
+                MoveApproved = cs.MoveApproved, TotalQuestions = cs.TotalQuestions, CheatCount = cs.CheatCount, Token = cs.Token, Ip = cs.Ip
             };
             c.Sheet.Candidate = cs.Sheet.Candidate; c.Sheet.Code = cs.Sheet.Code;
             c.Sheet.Choices = cs.Sheet.Choices; c.Sheet.Essays = cs.Sheet.Essays; c.Sheet.Multi = cs.Sheet.Multi;

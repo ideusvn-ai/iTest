@@ -32,6 +32,7 @@ public partial class MainWindow : Window
     private bool _submitted;
     private bool _released;
     private bool _registered;
+    private string _sessionToken = "";
     private readonly Dictionary<int, int> _choices = new();
     private readonly Dictionary<int, string> _essays = new();
     private readonly Dictionary<int, HashSet<int>> _multi = new();
@@ -136,21 +137,28 @@ public partial class MainWindow : Window
         await ConnectTo(new RoomBeacon { Address = host, Port = Ports.Session, Room = host, Open = true });
     }
 
+    private string _pin = "";
     private async Task ConnectTo(RoomBeacon b)
     {
         FindError.Text = "";
+        var pin = PinBox.Text.Trim();
+        if (pin.Length == 0) { FindError.Text = "Nhập mã phòng thi do giám thị đọc."; return; }
+        _pin = pin;
         try
         {
-            var c = await Connection.ConnectAsync(b.Address, b.Port);
+            var c = await Connection.ConnectAsync(b.Address, b.Port, _pin);
             AttachConnection(c);
             _room = b;
-            c.Send(Msg.Hello, new { machine = Environment.MachineName, workgroup = _listener.Workgroup, ip = NetUtil.LocalIPv4() });
+            SendHello(c);
             RoomLine.Text = $"{b.Room} · {b.Exam} · Giám thị: {b.Proctor}";
             FindPanel.Visibility = Visibility.Collapsed;
             Anim.Show(InfoPanel);
         }
         catch (Exception ex) { FindError.Text = "Không kết nối được máy chủ: " + ex.Message; }
     }
+
+    private void SendHello(Connection c) =>
+        c.Send(Msg.Hello, new { machine = Environment.MachineName, workgroup = _listener.Workgroup, ip = NetUtil.LocalIPv4(), token = _sessionToken });
 
     private void AttachConnection(Connection c)
     {
@@ -186,7 +194,7 @@ public partial class MainWindow : Window
         if (AgreeBox.IsChecked != true) { InfoError.Text = "Bạn cần xác nhận cam kết tuân thủ nội quy."; return; }
         InfoError.Text = "";
         _info = new CandidateInfo { Sbd = SbdBox.Text.Trim(), FullName = NameBox.Text.Trim(), BirthDate = DobBox.Text, ClassName = ClassBox.Text.Trim() };
-        _conn?.Send(Msg.Register, _info);
+        _conn?.Send(Msg.Register, new { _info.Sbd, _info.FullName, _info.BirthDate, _info.ClassName, token = _sessionToken });
     }
 
     private void SetInfoLocked(bool locked)
@@ -220,6 +228,7 @@ public partial class MainWindow : Window
                 break;
             case Msg.Registered:
                 _registered = true;
+                _sessionToken = m.Str("token");
                 SetInfoLocked(true);
                 break;
             case Msg.Reject:
@@ -291,6 +300,16 @@ public partial class MainWindow : Window
     private async void OnDisconnected()
     {
         if (_released) return;
+        // Mất kết nối trước khi đăng ký xong (thường do nhập sai mã phòng, hoặc kết nối nhầm máy chủ giả):
+        // quay lại màn hình tìm phòng và báo rõ.
+        if (!_registered && !_examRunning)
+        {
+            _conn = null;
+            InfoPanel.Visibility = Visibility.Collapsed;
+            Anim.Show(FindPanel);
+            FindError.Text = "Không vào được phòng. Kiểm tra lại mã phòng thi (do giám thị đọc) rồi thử lại.";
+            return;
+        }
         if (!_examRunning || _submitted)
         {
             if (!_submitted) { FindError.Text = "Mất kết nối với máy chủ."; }
@@ -302,10 +321,10 @@ public partial class MainWindow : Window
             await Task.Delay(3000);
             try
             {
-                var c = await Connection.ConnectAsync(_room.Address, _room.Port);
+                var c = await Connection.ConnectAsync(_room.Address, _room.Port, _pin);
                 AttachConnection(c);
-                c.Send(Msg.Hello, new { machine = Environment.MachineName, workgroup = _listener.Workgroup, ip = NetUtil.LocalIPv4() });
-                c.Send(Msg.Register, _info);
+                SendHello(c);
+                c.Send(Msg.Register, new { _info.Sbd, _info.FullName, _info.BirthDate, _info.ClassName, token = _sessionToken });
                 foreach (var (k, v) in _choices) c.Send(Msg.Answer, new { no = k, choice = v });
                 foreach (var (k, v) in _essays) c.Send(Msg.Essay, new { no = k, text = v });
                 ResendExtra(c);

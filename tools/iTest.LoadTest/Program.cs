@@ -3,8 +3,9 @@ using System.Text.Json.Nodes;
 using ITest.Core;
 
 // iTest-LoadTest: giả lập nhiều máy thí sinh kết nối tới iTest-Server để thử tải trước kỳ thi.
-//   iTest-LoadTest [--host 192.168.1.10] [--clients 60] [--drop 5] [--think 3]
+//   iTest-LoadTest [--host 192.168.1.10] [--pin 1234] [--clients 60] [--drop 5] [--think 3]
 //   --host     IP máy chủ (bỏ trống: tự tìm phòng thi trong mạng LAN qua UDP)
+//   --pin      Mã phòng thi 4 số hiển thị trên iTest-Server (bắt buộc để vào phòng)
 //   --clients  số máy giả lập (mặc định 40)
 //   --drop     % khả năng mỗi máy mất mạng trong mỗi phút làm bài (mặc định 5)
 //   --think    số giây trung bình giữa hai lần trả lời (mặc định 4)
@@ -44,13 +45,14 @@ while (!cts.IsCancellationRequested && !sims.All(s => s.Finished))
 Console.WriteLine("\nKết thúc. Kiểm tra trên iTest-Server: tất cả máy LT… phải ở trạng thái đúng, bài làm khớp, không mất câu trả lời.");
 return 0;
 
-sealed record Args(string? Host, int Clients, double DropPercent, double Think)
+sealed record Args(string? Host, int Clients, double DropPercent, double Think, string Pin)
 {
     public static Args Parse(string[] a)
     {
         string? Get(string k) { int i = Array.IndexOf(a, k); return i >= 0 && i + 1 < a.Length ? a[i + 1] : null; }
         return new Args(Get("--host"), int.TryParse(Get("--clients"), out var n) ? n : 40,
-            double.TryParse(Get("--drop"), out var d) ? d : 5, double.TryParse(Get("--think"), out var t) ? Math.Max(0.2, t) : 4);
+            double.TryParse(Get("--drop"), out var d) ? d : 5, double.TryParse(Get("--think"), out var t) ? Math.Max(0.2, t) : 4,
+            Get("--pin") ?? "");
     }
 }
 
@@ -85,7 +87,7 @@ sealed class SimClient
         {
             try
             {
-                _c = await Connection.ConnectAsync(_host, Ports.Session);
+                _c = await Connection.ConnectAsync(_host, Ports.Session, _o.Pin);
                 var closed = new TaskCompletionSource();
                 _c.Received += OnMessage;
                 _c.Closed += _ => closed.TrySetResult();
@@ -93,7 +95,7 @@ sealed class SimClient
                 Interlocked.Increment(ref _s.Connected);
                 if (!first) Interlocked.Increment(ref _s.Reconnects);
                 first = false;
-                _c.Send(Msg.Hello, new { machine = Machine, workgroup = NetUtil.GetWorkgroup(), ip = "loadtest" });
+                _c.Send(Msg.Hello, new { machine = Machine, workgroup = NetUtil.GetWorkgroup(), ip = "loadtest", token = "" });
                 _c.Send(Msg.Register, Info);
                 foreach (var (k, v) in _choices) _c.Send(Msg.Answer, new { no = k, choice = v });
                 await Task.WhenAny(closed.Task, Loop(_c));

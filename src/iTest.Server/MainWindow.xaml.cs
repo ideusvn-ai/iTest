@@ -317,6 +317,7 @@ public partial class MainWindow : Window
         PkgInfo.ItemsSource = InfoRows(_room.Exam).Take(8).ToList();
         ExamTitle.Text = $"{_room.Exam.ExamName} – {_room.Exam.Subject}";
         RoomLine.Text = $"{_room.School} · {_room.Room} · Giám thị: {_room.Proctor}";
+        PinText.Text = _room.RoomPin;
     }
 
     // ================== Làm mới giao diện ==================

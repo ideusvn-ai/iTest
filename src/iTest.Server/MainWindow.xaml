@@ -113,6 +113,13 @@
             <Border Background="White" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="20,10">
                 <DockPanel>
                     <WrapPanel DockPanel.Dock="Right" VerticalAlignment="Center">
+                        <Border Background="{StaticResource PrimarySoft}" CornerRadius="12" Padding="14,4" Margin="0,0,12,0"
+                                ToolTip="Đọc mã này cho thí sinh nhập khi vào phòng. Máy chủ giả không có mã này sẽ không lừa được máy thí sinh.">
+                            <StackPanel>
+                                <TextBlock x:Name="PinText" FontFamily="{StaticResource MonoFont}" FontSize="24" FontWeight="Bold" Foreground="{StaticResource Primary}"/>
+                                <TextBlock Text="MÃ PHÒNG THI" FontSize="10" FontWeight="Bold" Foreground="{StaticResource Primary}"/>
+                            </StackPanel>
+                        </Border>
                         <Border Background="#F8FAFC" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="12" Padding="14,4" Margin="0,0,12,0">
                             <StackPanel>
                                 <TextBlock x:Name="TimerText" FontFamily="{StaticResource MonoFont}" FontSize="24" FontWeight="Bold"/>

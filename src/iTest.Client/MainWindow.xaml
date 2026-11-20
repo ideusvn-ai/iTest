@@ -59,6 +59,9 @@
                         <Button Content="Kết nối" DockPanel.Dock="Right" Margin="8,0,0,0" Click="ManualConnect_Click"/>
                         <TextBox x:Name="ManualHost" ToolTip="Ví dụ 192.168.10.2"/>
                     </DockPanel>
+                    <TextBlock Text="Mã phòng thi (giám thị đọc)" Style="{StaticResource FieldLabel}" Margin="0,14,0,4"/>
+                    <TextBox x:Name="PinBox" MaxLength="4" FontSize="20" FontWeight="Bold" HorizontalContentAlignment="Center"
+                             ToolTip="Nhập đúng mã 4 số giám thị đọc cho cả phòng."/>
                     <Button x:Name="JoinBtn" Content="Vào phòng thi" Style="{StaticResource BtnPrimary}" Margin="0,16,0,0" MinHeight="46" IsEnabled="False" Click="Join_Click"/>
                     <TextBlock x:Name="FindError" Foreground="{StaticResource Bad}" TextWrapping="Wrap" Margin="0,8,0,0"/>
                     <Button Content="Thoát" Style="{StaticResource BtnGhost}" HorizontalAlignment="Center" Margin="0,4,0,0" Click="Quit_Click"/>

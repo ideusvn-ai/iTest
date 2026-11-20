@@ -119,9 +119,12 @@ bộ gõ TELEX/VNI và kết nối mã hoá. GitHub Actions chạy bộ kiểm t
 ## Mạng và bảo mật
 - Máy chủ quảng bá phòng thi qua **UDP 47800**; phiên làm bài dùng **TCP 47801**. Bộ cài tự mở các cổng này trong Windows Firewall.
 - Máy thí sinh chỉ thấy phòng thi **cùng workgroup** Windows. Nếu không dò được (mạng chặn broadcast), nhập IP máy chủ ở ô “Hoặc nhập địa chỉ máy chủ”.
-- **Đường truyền LAN được mã hoá**: mỗi kết nối trao đổi khoá ECDH P-256 tạm thời, mọi tin nhắn mã hoá AES-256-GCM,
-  có bộ đếm chống phát lại. Máy nghe lén trong mạng không đọc được đề và bài làm; khung tin bị sửa sẽ bị loại.
-  Phiên bản này chưa xác thực danh tính máy chủ, nên vẫn nên dùng mạng riêng của phòng máy.
+- **Đường truyền LAN được mã hoá & có xác thực bằng mã phòng**: mỗi kết nối trao đổi khoá ECDH P-256 tạm thời,
+  mọi tin nhắn mã hoá AES-256-GCM, có bộ đếm chống phát lại. iTest-Server sinh **mã phòng thi 4 số** (hiển thị trên bảng
+  điều khiển); giám thị đọc cho cả phòng, thí sinh nhập khi vào phòng. Mã phòng được trộn vào khoá phiên, nên **máy chủ giả
+  không có mã phòng sẽ không lừa được máy thí sinh**, và máy nhập sai mã không vào được. Người nghe lén không đọc được đề/bài làm.
+- **Chống cướp phiên**: khi đăng ký, mỗi máy thí sinh được máy chủ cấp một token phiên ngẫu nhiên. Chỉ máy giữ đúng token mới
+  giành lại được phiên khi rớt mạng; máy khác khai trùng số báo danh sẽ bị từ chối (trừ khi giám thị duyệt chuyển máy).
 - File `.itz` được mã hoá **AES-256-GCM**, khoá sinh từ mật khẩu bằng PBKDF2-SHA256 (200.000 vòng); file bị sửa sẽ không mở được.
 - Chế độ thi: toàn màn hình, luôn nằm trên cùng, chặn phím Windows, Alt+Tab, Alt+Esc, Ctrl+Esc, Alt+F4 và tạm tắt Task Manager.
   **Ctrl+Alt+Del không thể chặn** bằng phần mềm thường; mọi lần cửa sổ mất tiêu điểm đều được báo về máy chủ.
