@@ -20,9 +20,11 @@
                     <TextBlock x:Name="BlockText" TextWrapping="Wrap" Margin="0,18,0,0" FontSize="15"/>
                     <TextBlock x:Name="BlockNote" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="{StaticResource Muted}"/>
                     <Grid Margin="0,20,0,0">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                        <Button Content="Thoát" MinHeight="48" MinWidth="110" Click="Quit_Click"/>
-                        <Button x:Name="BlockRetry" Grid.Column="2" Content="Kiểm tra lại" Style="{StaticResource BtnPrimary}" MinHeight="48" Click="BlockRetry_Click"/>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="10"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Button Content="Thoát" MinHeight="48" MinWidth="100" Click="Quit_Click"/>
+                        <Button Grid.Column="2" Content="Vẫn mở phòng thi" Style="{StaticResource BtnWarn}" MinHeight="48" Click="ForceOpen_Click"
+                                ToolTip="Bỏ qua cảnh báo và mở phòng trên máy này. Thí sinh vẫn chỉ vào đúng máy chủ nhờ mã phòng bạn đọc."/>
+                        <Button x:Name="BlockRetry" Grid.Column="3" Content="Kiểm tra lại" Style="{StaticResource BtnPrimary}" MinHeight="48" Margin="10,0,0,0" Click="BlockRetry_Click"/>
                     </Grid>
                 </StackPanel>
             </Border>

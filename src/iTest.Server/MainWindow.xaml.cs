@@ -75,6 +75,7 @@ public partial class MainWindow : Window
                 _room.Log("CẢNH BÁO", b.Host, $"Máy {b.Host} ({b.Address}) cũng đang mở phòng thi “{b.Room}” trong cùng mạng — thí sinh có thể vào nhầm phòng");
             return;
         }
+        if (_ignorePeer) return;   // giám thị đã chọn "Vẫn mở phòng thi"
         Block(b);
     }
 
@@ -83,8 +84,8 @@ public partial class MainWindow : Window
     {
         BlockText.Text = $"Máy {b.Host} ({b.Address}) đang mở phòng thi “{b.Room}” · {b.Exam}" +
                          (string.IsNullOrWhiteSpace(b.Proctor) ? "" : $" · giám thị {b.Proctor}") + $" · {b.Candidates} thí sinh.";
-        BlockNote.Text = "Máy này không được mở phòng thi khi máy chủ kia còn hoạt động. Đã gửi thông báo tới máy chủ đang mở phòng. "
-                       + "Nếu phòng kia đã đóng, bấm “Kiểm tra lại”.";
+        BlockNote.Text = "Nên dùng đúng một máy chủ cho mỗi phòng. Nếu máy kia đã đóng, bấm “Kiểm tra lại”. "
+                       + "Nếu máy này mới là máy chủ đúng, bấm “Vẫn mở phòng thi” — thí sinh vẫn chỉ vào đúng máy nhờ mã phòng bạn đọc.";
         SetupPanel.Visibility = Visibility.Collapsed;
         ScanPanel.Visibility = Visibility.Collapsed;
         if (BlockPanel.Visibility != Visibility.Visible) Anim.Show(BlockPanel);
@@ -104,6 +105,18 @@ public partial class MainWindow : Window
             c.Dispose();
         }
         catch { }
+    }
+
+    private bool _ignorePeer;
+
+    /// <summary>Giám thị chủ động mở phòng trên máy này dù phát hiện máy chủ khác (máy này mới là máy chủ đúng).</summary>
+    private void ForceOpen_Click(object sender, RoutedEventArgs e)
+    {
+        _ignorePeer = true;
+        BlockPanel.Visibility = Visibility.Collapsed;
+        ScanPanel.Visibility = Visibility.Collapsed;
+        Anim.Show(SetupPanel);
+        CheckRecovery();
     }
 
     private async void BlockRetry_Click(object sender, RoutedEventArgs e)
@@ -144,7 +157,7 @@ public partial class MainWindow : Window
     private async void Recover_Click(object sender, RoutedEventArgs e)
     {
         if (_recover == null) return;
-        if (PeerActive()) { Block(_peer!); return; }
+        if (!_ignorePeer && PeerActive()) { Block(_peer!); return; }
         var st = _recover;
         if (!File.Exists(st.PackagePath))
         {
@@ -288,7 +301,7 @@ public partial class MainWindow : Window
         _room.LoadPackage(_pkg, _pkgPath!);
         _room.SubmitWindowMinutes = SelectedWindow();
         _room.ShowScore = ShowScoreBox.IsChecked == true;
-        if (PeerActive()) { _room.Dispose(); _room = null; Block(_peer!); return; }
+        if (!_ignorePeer && PeerActive()) { _room.Dispose(); _room = null; Block(_peer!); return; }
         try { _room.Open(); }
         catch (Exception ex) { SetupError.Text = "Không mở được cổng mạng (có thể đang có iTest-Server khác chạy): " + ex.Message; _room.Dispose(); _room = null; return; }
         EnterRoom();
