@@ -96,7 +96,7 @@ public partial class MainWindow : Window
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var c = await Connection.ConnectAsync(b.Address, b.Port, cts.Token);
+            var c = await Connection.ConnectAsync(b.Address, b.Port, ct: cts.Token);
             c.Start();
             await c.SendAsync(Msg.DupServer, new { machine = Environment.MachineName, ip = NetUtil.LocalIPv4(), user = Environment.UserName })
                    .WaitAsync(TimeSpan.FromSeconds(5));
