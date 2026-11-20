@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(800) };
     private readonly List<TextBox> _optBoxes = new();
     private TextBox? _mathTarget;
+    private bool _mathOn;
     private static readonly QuestionType[] ObjectiveTypes = { QuestionType.MultipleChoice, QuestionType.MultiSelect, QuestionType.YesNo, QuestionType.TrueFalse };
     private static readonly CultureInfo Vi = CultureInfo.GetCultureInfo("vi-VN");
     private static readonly string[] MathSymbols = { "√", "²", "³", "≤", "≥", "≠", "±", "×", "÷", "π", "Δ", "∞", "°", "∈", "∉", "⊂", "∩", "∪", "∅", "ℝ", "⇒", "⇔", "α", "β" };
@@ -92,7 +93,32 @@ public partial class MainWindow : Window
 
     private void RefreshDrafts()
     {
-        DraftList.ItemsSource = Draft.All().Select(d => new DraftItem(d)).ToList();
+        // Dọn bản nháp rác: khung đề trống (chưa gõ câu nào), không phải bản đang mở.
+        foreach (var d in Draft.All())
+            if (d.Id != _draft?.Id && d.Exam.Questions.Count > 0 && d.Exam.Questions.All(q => string.IsNullOrWhiteSpace(q.Text) && q.Image == null && q.Audio == null))
+                d.Delete();
+        var items = Draft.All().Select(d => new DraftItem(d)).ToList();
+        DraftList.ItemsSource = items;
+        NoDraftHint.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void DeleteDraftItem_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not DraftItem di) return;
+        if (MessageBox.Show(this, $"Xoá bản nháp “{di.Title}”? Không thể hoàn tác.", "Xoá bản nháp", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        if (di.Draft.Id == _draft?.Id) _draft = null;
+        di.Draft.Delete();
+        RefreshDrafts();
+    }
+
+    private void DeleteAllDrafts_Click(object sender, RoutedEventArgs e)
+    {
+        var all = Draft.All();
+        if (all.Count == 0) return;
+        if (MessageBox.Show(this, $"Xoá tất cả {all.Count} bản nháp chưa đóng gói? Không thể hoàn tác.", "Xoá tất cả bản nháp", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        foreach (var d in all) d.Delete();
+        _draft = null;
+        RefreshDrafts();
     }
 
     private void Create_Click(object sender, RoutedEventArgs e)
@@ -216,6 +242,18 @@ public partial class MainWindow : Window
                 if (pass == null) return;
             }
             var c = ExamPackage.Load(dlg.FileName, pass);
+            // Tránh tạo trùng: nếu đã có bản nháp cùng môn + kỳ thi, mở lại bản nháp đó.
+            var dup = Draft.All().FirstOrDefault(x =>
+                string.Equals(x.Exam.Subject, c.Exam.Subject, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.Exam.ExamName, c.Exam.ExamName, StringComparison.OrdinalIgnoreCase));
+            if (dup != null && MessageBox.Show(this,
+                    $"Đã có bản nháp “{dup.Exam.Subject} · {dup.Exam.ExamName}”.\n\nMở bản nháp đó để soạn tiếp? (Chọn No để tạo bản nháp mới từ file.)",
+                    "Mở bộ đề", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+            {
+                _draft = dup;
+                OpenEditor();
+                return;
+            }
             var d = new Draft { Exam = c.Exam, Locked = pass != null, Password = pass ?? "" };
             Directory.CreateDirectory(d.MediaFolder);
             foreach (var (name, data) in c.Media) File.WriteAllBytes(Path.Combine(d.MediaFolder, name), data);
@@ -458,12 +496,23 @@ public partial class MainWindow : Window
             VietInput.Insert(target, "$" + dlg.Latex.Trim() + "$");
     }
 
-    /// <summary>Xem trước câu hỏi khi có công thức toán.</summary>
+    /// <summary>Bật/tắt công cụ công thức toán. Mặc định tắt; tự bật khi câu đang mở đã có công thức.</summary>
+    private void MathToggle_Click(object sender, RoutedEventArgs e) => SetMath(!_mathOn);
+
+    private void SetMath(bool on)
+    {
+        _mathOn = on;
+        EMathToggle.Content = on ? "∑  Ẩn công thức toán học" : "∑  Bật công thức toán học";
+        EMathBar.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        UpdatePreview();
+    }
+
+    /// <summary>Xem trước câu hỏi khi đã bật công thức và câu có công thức toán.</summary>
     private void UpdatePreview()
     {
         var q = Cur;
         if (q == null) return;
-        bool any = RichMath.HasMath(q.Text) || (q.Type.HasOptions() && q.Options.Any(RichMath.HasMath));
+        bool any = _mathOn && (RichMath.HasMath(q.Text) || (q.Type.HasOptions() && q.Options.Any(RichMath.HasMath)));
         EPreviewBox.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
         if (!any) { EPreview.Content = null; return; }
         var sp = new StackPanel();
@@ -504,6 +553,8 @@ public partial class MainWindow : Window
         EShortKey.Text = q.ShortKey;
         EGuide.Text = q.Guide;
         _mathTarget = EText;
+        // Tự bật công thức nếu câu này đã có công thức, để không che mất công cụ đang dùng.
+        if (!_mathOn && (RichMath.HasMath(q.Text) || q.Options.Any(RichMath.HasMath) || RichMath.HasMath(q.Guide))) SetMath(true);
         UpdatePreview();
         ShowMedia(q);
         _loading = false;

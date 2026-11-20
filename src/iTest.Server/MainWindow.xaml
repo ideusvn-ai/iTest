@@ -81,6 +81,10 @@
                                     <PasswordBox x:Name="PassBox"/>
                                 </DockPanel>
                             </StackPanel>
+                            <StackPanel x:Name="PkgLoading" Visibility="Collapsed" Margin="0,8,0,0">
+                                <TextBlock x:Name="PkgLoadingText" Text="Đang mở bộ đề…" Style="{StaticResource Hint}" Margin="0,0,0,6"/>
+                                <ProgressBar IsIndeterminate="True" Height="6"/>
+                            </StackPanel>
                             <ItemsControl x:Name="PkgFileInfo" Margin="0,8,0,0">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -240,8 +244,11 @@
                         <Border Grid.Column="2" Style="{StaticResource CardBorder}" Padding="14">
                             <DockPanel>
                                 <StackPanel DockPanel.Dock="Top">
-                                    <TextBlock Text="Xử lý thí sinh" Style="{StaticResource H2}" Margin="0"/>
+                                    <TextBlock Text="Tác vụ riêng" Style="{StaticResource H2}" Margin="0"/>
                                     <TextBlock x:Name="SelLine" Style="{StaticResource Hint}" Margin="0,2,0,8" Text="Chọn một thí sinh trong danh sách."/>
+                                    <Button x:Name="HandOutBtn" Content="📤  Phát đề riêng cho máy này" Style="{StaticResource BtnOk}" MinHeight="40" Margin="0,0,0,6"
+                                            Visibility="Collapsed" Click="HandOut_Click"
+                                            ToolTip="Máy vào phòng sau khi đã phát đề sẽ chờ ở đây; bấm để phát đề riêng cho máy đang chọn."/>
                                     <UniformGrid Columns="2">
                                         <Button x:Name="WarnBtn" Content="Nhắc nhở" Style="{StaticResource BtnWarn}" Margin="0,0,4,6" Click="Warn_Click"/>
                                         <Button x:Name="RevokeBtn" Content="Thu bài · huỷ KQ" Style="{StaticResource BtnDanger}" Margin="4,0,0,6" Click="Revoke_Click"/>

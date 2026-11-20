@@ -285,11 +285,17 @@ public sealed class RoomService : IDisposable
             Log("THAM GIA", cand.Machine, $"vừa tham gia phòng thi · {info.FullName} · SBD {info.Sbd}");
         }
         conn.Send(Msg.Registered);
-        if (Phase == Phase.Running && cand.Status is CandStatus.Waiting or CandStatus.Doing)
+        if (Phase == Phase.Running && cand.Status == CandStatus.Doing)
         {
-            if (cand.Status == CandStatus.Waiting) { AssignCode(cand); cand.Status = CandStatus.Doing; }
+            // Máy đang thi kết nối lại: gửi lại đề và bài làm đã lưu.
             SendExam(cand);
             conn.Send(Msg.Resume, new { choices = cand.Sheet.Choices, essays = cand.Sheet.Essays, multi = cand.Sheet.Multi, tf = cand.Sheet.Tf, shortAns = cand.Sheet.Short });
+        }
+        else if (Phase == Phase.Running && cand.Status == CandStatus.Waiting)
+        {
+            // Máy vào phòng sau khi đã phát đề: chờ giám thị phát đề riêng.
+            conn.Send(Msg.Notice, new { kind = "all", text = "Bạn vào phòng sau khi đề đã được phát. Vui lòng chờ giám thị phát đề cho máy của bạn." });
+            Log("CHỜ PHÁT ĐỀ", cand.Machine, $"vào phòng sau khi đã phát đề · chờ phát đề riêng · {cand.FullName}");
         }
         else if (cand.Status == CandStatus.Done)
             SendResult(cand);
@@ -327,6 +333,22 @@ public sealed class RoomService : IDisposable
         var layout = Layouts.First(l => l.Code == c.Sheet.Code);
         var ce = Shuffler.ToClient(Exam, layout, Media, Department, School);
         c.Conn?.Send(Msg.Exam, new { exam = ce, secondsLeft = LeftOf(c), submitWindow = SubmitWindowMinutes });
+    }
+
+    /// <summary>Có máy nào đang chờ phát đề riêng không (vào phòng sau khi đã phát đề).</summary>
+    public bool CanHandOut(Candidate c) => Phase == Phase.Running && c.Conn != null && c.Status == CandStatus.Waiting;
+
+    /// <summary>Phát đề riêng cho một máy vào muộn.</summary>
+    public void HandOutTo(Candidate c)
+    {
+        if (!CanHandOut(c)) return;
+        AssignCode(c);
+        c.Status = CandStatus.Doing;
+        SendExam(c);
+        c.Conn?.Send(Msg.Resume, new { choices = c.Sheet.Choices, essays = c.Sheet.Essays, multi = c.Sheet.Multi, tf = c.Sheet.Tf, shortAns = c.Sheet.Short });
+        Log("PHÁT ĐỀ", c.Machine, $"phát đề riêng · mã {c.Sheet.Code} · {c.FullName}");
+        SaveState();
+        Changed?.Invoke();
     }
 
     public void Start()
@@ -374,8 +396,12 @@ public sealed class RoomService : IDisposable
             if (Phase == Phase.Running && c.Status == CandStatus.Doing && TickCount % 5 == 0)
                 c.Conn?.Send(Msg.Time, new { secondsLeft = LeftOf(c), paused = Paused });
         }
-        if (TickCount % 30 == 0) Backup();
-        else if (TickCount % 5 == 0) SaveState();
+        // Sao lưu tự động chỉ chạy sau khi đã phát đề (lúc chưa phát đề không có bài làm để lưu).
+        if (Phase != Phase.Open)
+        {
+            if (TickCount % 30 == 0) Backup();
+            else if (TickCount % 5 == 0) SaveState();
+        }
         Changed?.Invoke();
     }
 

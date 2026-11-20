@@ -227,26 +227,37 @@ public partial class MainWindow : Window
             PkgFileInfo.ItemsSource = null;
             Anim.Show(FileBox);
             PickBtn.Content = "⬆  Đã chọn · bấm để chọn bộ đề khác";
-            if (!locked) Unlock(null);
+            if (!locked) _ = Unlock(null);
         }
         catch (Exception ex) { SetupError.Text = ex.Message; }
     }
 
-    private void Unlock_Click(object sender, RoutedEventArgs e) => Unlock(PassBox.Password);
+    private void Unlock_Click(object sender, RoutedEventArgs e) => _ = Unlock(PassBox.Password);
 
-    private void Unlock(string? password)
+    private bool _unlocking;
+    /// <summary>Giải mã và đọc bộ đề ở luồng nền (tránh treo giao diện), có thanh tiến trình.</summary>
+    private async Task Unlock(string? password)
     {
-        if (_pkgPath == null) return;
+        if (_pkgPath == null || _unlocking) return;
+        _unlocking = true;
+        var path = _pkgPath;
+        SetupError.Text = "";
+        PkgFileInfo.ItemsSource = null;
+        PkgLoadingText.Text = "Đang giải mã và đọc bộ đề…";
+        PkgLoading.Visibility = Visibility.Visible;
         try
         {
-            _pkg = ExamPackage.Load(_pkgPath, password);
-            PkgFileInfo.ItemsSource = InfoRows(_pkg.Exam);
+            var pkg = await Task.Run(() => ExamPackage.Load(path, password));
+            if (_pkgPath != path) return;   // người dùng đã đổi file khác trong lúc chờ
+            _pkg = pkg;
+            PkgFileInfo.ItemsSource = InfoRows(pkg.Exam);
             FileLock.Text = "✓ Đã mở khoá · chữ ký hợp lệ";
             PassRow.Visibility = Visibility.Collapsed;
             SetupError.Text = "";
         }
         catch (CryptographicException) { SetupError.Text = "Sai mật khẩu hoặc file bộ đề đã bị chỉnh sửa."; }
         catch (Exception ex) { SetupError.Text = "Không mở được bộ đề: " + ex.Message; }
+        finally { PkgLoading.Visibility = Visibility.Collapsed; _unlocking = false; }
     }
 
     private static List<object> InfoRows(ExamSet x) => new()
@@ -440,6 +451,14 @@ public partial class MainWindow : Window
         EditReqBtn.Content = c != null && c.EditRequested ? "✓ Đã gửi yêu cầu sửa thông tin" : "Yêu cầu sửa thông tin";
         WarnBtn.Content = c?.WarnedAt != null ? $"Đã nhắc ({c.WarnedAt})" : "Nhắc nhở";
         KickBtn.IsEnabled = c != null && c.Conn != null && !c.IsActive;
+        HandOutBtn.Visibility = c != null && r?.CanHandOut(c) == true ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void HandOut_Click(object sender, RoutedEventArgs e)
+    {
+        if (_room == null || _sel == null || !_room.CanHandOut(_sel)) return;
+        _room.HandOutTo(_sel);
+        UpdateSelection();
     }
 
     // ================== Nút điều khiển ==================
