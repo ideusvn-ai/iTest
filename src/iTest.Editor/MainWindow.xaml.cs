@@ -50,7 +50,7 @@ public partial class MainWindow : Window
         PreviewKeyDown += FastEntryKeys;
         RefreshDrafts();
         UpdateFormTotal();
-        Closing += (_, _) => { if (_draft != null) { SaveNow(); RememberSession(); } };
+        Closing += (_, _) => { if (_draft != null) { _draft.Save(sync: true); RememberSession(); } };
         RestoreSession();
     }
 
@@ -229,19 +229,20 @@ public partial class MainWindow : Window
         RefreshDrafts();
     }
 
-    private void OpenPackage_Click(object sender, RoutedEventArgs e)
+    private async void OpenPackage_Click(object sender, RoutedEventArgs e)
     {
         var dlg = new OpenFileDialog { Filter = "Bộ đề iTest (*.itz)|*.itz" };
         if (dlg.ShowDialog(this) != true) return;
+        var file = dlg.FileName;
         try
         {
             string? pass = null;
-            if (ExamPackage.IsPasswordProtected(dlg.FileName))
+            if (ExamPackage.IsPasswordProtected(file))
             {
                 pass = AskPassword();
                 if (pass == null) return;
             }
-            var c = ExamPackage.Load(dlg.FileName, pass);
+            var c = await Busy.Run(this, "Đang giải mã và đọc bộ đề…", () => ExamPackage.Load(file, pass));
             // Tránh tạo trùng: nếu đã có bản nháp cùng môn + kỳ thi, mở lại bản nháp đó.
             var dup = Draft.All().FirstOrDefault(x =>
                 string.Equals(x.Exam.Subject, c.Exam.Subject, StringComparison.OrdinalIgnoreCase) &&
@@ -637,7 +638,7 @@ public partial class MainWindow : Window
     {
         if (_draft != null)
         {
-            SaveNow();
+            _draft.Save(sync: true);
             RememberSession();
             if (!_packed && MessageBox.Show(this, "Bộ đề chưa đóng gói. Phiên làm việc đã được lưu và sẽ tự mở lại lần sau.\n\nThoát iTest-Editor?",
                     "Thoát", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
@@ -756,13 +757,14 @@ public partial class MainWindow : Window
     private void ImportWord_Click(object sender, RoutedEventArgs e) => Import("Word (*.docx)|*.docx", Importer.FromWord);
     private void ImportExcel_Click(object sender, RoutedEventArgs e) => Import("Excel (*.xlsx)|*.xlsx", Importer.FromExcel);
 
-    private void Import(string filter, Func<string, List<ImportedQuestion>> reader)
+    private async void Import(string filter, Func<string, List<ImportedQuestion>> reader)
     {
         if (_draft == null) return;
         var dlg = new OpenFileDialog { Filter = filter };
         if (dlg.ShowDialog(this) != true) return;
+        var file = dlg.FileName;
         List<ImportedQuestion> items;
-        try { items = reader(dlg.FileName); }
+        try { items = await Busy.Run(this, "Đang đọc và phân tích file câu hỏi…", () => reader(file)); }
         catch (Exception ex) { MessageBox.Show(this, "Không đọc được file: " + ex.Message, "Nhập câu hỏi"); return; }
 
         var x = _draft.Exam;
@@ -797,7 +799,7 @@ public partial class MainWindow : Window
         Changed();
     }
 
-    private void ExportPdf_Click(object sender, RoutedEventArgs e)
+    private async void ExportPdf_Click(object sender, RoutedEventArgs e)
     {
         if (_draft == null) return;
         SaveNow();
@@ -807,30 +809,31 @@ public partial class MainWindow : Window
         var name = string.Join("_", $"BoDeThiMau_{x.Subject}".Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Replace(' ', '_');
         var dlg = new SaveFileDialog { Filter = "PDF (*.pdf)|*.pdf", FileName = name + ".pdf" };
         if (dlg.ShowDialog(this) != true) return;
+        var path = dlg.FileName; var media = _draft.MediaFolder; var options = opt.Options;
         try
         {
-            System.Windows.Input.Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
-            ExamPdf.Export(dlg.FileName, x, _draft.MediaFolder, opt.Options);
-            System.Windows.Input.Mouse.OverrideCursor = null;
-            if (MessageBox.Show(this, "Đã xuất đề thi:\n" + dlg.FileName + "\n\nMở file ngay?", "iTest-Editor", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dlg.FileName) { UseShellExecute = true });
+            // Vẽ công thức trên luồng giao diện (bắt buộc), tạo PDF ở luồng nền.
+            var prepared = ExamPdf.RenderFormulas(x);
+            await Busy.Run(this, "Đang tạo đề PDF…", () => ExamPdf.Export(path, x, media, options, prepared));
+            if (MessageBox.Show(this, "Đã xuất đề thi:\n" + path + "\n\nMở file ngay?", "iTest-Editor", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
         }
         catch (Exception ex)
         {
-            System.Windows.Input.Mouse.OverrideCursor = null;
             MessageBox.Show(this, "Không xuất được PDF: " + ex.Message, "iTest-Editor", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
-    private void Template_Click(object sender, RoutedEventArgs e)
+    private async void Template_Click(object sender, RoutedEventArgs e)
     {
         var dlg = new SaveFileDialog { Filter = "Excel (*.xlsx)|*.xlsx", FileName = "Mau_NhapCauHoi_iTest.xlsx" };
         if (dlg.ShowDialog(this) != true) return;
-        try { Importer.WriteExcelTemplate(dlg.FileName); MessageBox.Show(this, "Đã tạo file mẫu:\n" + dlg.FileName, "iTest-Editor"); }
+        var path = dlg.FileName;
+        try { await Busy.Run(this, "Đang tạo file Excel mẫu…", () => Importer.WriteExcelTemplate(path)); MessageBox.Show(this, "Đã tạo file mẫu:\n" + path, "iTest-Editor"); }
         catch (Exception ex) { MessageBox.Show(this, ex.Message, "iTest-Editor"); }
     }
 
-    private void Pack_Click(object sender, RoutedEventArgs e)
+    private async void Pack_Click(object sender, RoutedEventArgs e)
     {
         if (_draft == null) return;
         var x = _draft.Exam;
@@ -839,10 +842,11 @@ public partial class MainWindow : Window
             .Replace('đ', 'd').Replace('Đ', 'D').Replace(' ', '_');
         var dlg = new SaveFileDialog { Filter = "Bộ đề iTest (*.itz)|*.itz", FileName = Ascii($"{x.Subject}_{x.ExamName}").ToUpperInvariant() + ".itz" };
         if (dlg.ShowDialog(this) != true) return;
+        var path = dlg.FileName; var pass = _draft.Locked ? _draft.Password : null; var draft = _draft;
         try
         {
             x.CreatedAt = DateTime.Now;
-            ExamPackage.Save(dlg.FileName, x, _draft.LoadMedia(), _draft.Locked ? _draft.Password : null);
+            await Busy.Run(this, "Đang mã hoá và đóng gói bộ đề…", () => ExamPackage.Save(path, x, draft.LoadMedia(), pass));
             _packed = true;
             RememberSession();
             MessageBox.Show(this, $"Đã đóng gói bộ đề:\n{dlg.FileName}\n\n{(_draft.Locked ? "Hãy gửi mật khẩu cho giám thị qua kênh riêng." : "Bộ đề không đặt mật khẩu.")}",

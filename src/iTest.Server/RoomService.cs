@@ -127,7 +127,7 @@ public sealed class RoomService : IDisposable
 
     public void Close()
     {
-        SaveState(closed: true);
+        SaveState(closed: true, sync: true);
         foreach (var c in Candidates) c.Conn?.Send(Msg.Release);
         Log("THÔNG TIN", "", "Đóng phòng thi · đã mở khoá tất cả máy thí sinh");
         Task.Delay(800).ContinueWith(_ => _ui.Invoke(Dispose));
@@ -136,7 +136,7 @@ public sealed class RoomService : IDisposable
     /// <summary>Dùng khi thoát ứng dụng: báo các máy thí sinh thoát rồi đóng ngay.</summary>
     public void ReleaseAllAndDispose()
     {
-        SaveState(closed: true);
+        SaveState(closed: true, sync: true);
         var sends = Candidates.Where(c => c.Conn != null).Select(c => c.Conn!.SendAsync(Msg.Release)).ToArray();
         try { Task.WaitAll(sends, 800); } catch { }
         Dispose();
@@ -566,15 +566,18 @@ public sealed class RoomService : IDisposable
         Changed?.Invoke();
     }
 
+    // Ghi sao lưu ở luồng nền để không làm giật giao diện; một lần ghi tại một thời điểm.
+    private readonly object _diskLock = new();
+
     public void Backup()
     {
-        try
-        {
-            if (BackupDir.Length == 0) return;
-            var json = JsonSerializer.Serialize(Candidates.Select(c => c.Sheet).ToList(), new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(Path.Combine(BackupDir, "bai-lam.json"), json);
-        }
+        if (BackupDir.Length == 0) { SaveState(); return; }
+        string? json = null;
+        try { json = JsonSerializer.Serialize(Candidates.Select(c => c.Sheet).ToList(), new JsonSerializerOptions { WriteIndented = true }); }
         catch { }
+        var dir = BackupDir;
+        if (json != null)
+            Task.Run(() => { try { lock (_diskLock) File.WriteAllText(Path.Combine(dir, "bai-lam.json"), json); } catch { } });
         SaveState();
     }
 
@@ -582,9 +585,13 @@ public sealed class RoomService : IDisposable
     private const string StateFile = "trang-thai.json";
     public static string BackupRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "iTest-Server", "SaoLuu");
 
-    /// <summary>Ghi trạng thái phòng thi (ghi file tạm rồi đổi tên để không bao giờ để lại file hỏng khi mất điện).</summary>
-    public void SaveState(bool closed = false)
+    /// <summary>
+    /// Ghi trạng thái phòng thi (ghi file tạm rồi đổi tên để không để lại file hỏng khi mất điện).
+    /// Mặc định ghi ở luồng nền để không làm giật giao diện; đặt <paramref name="sync"/>=true khi cần ghi xong ngay (lúc đóng phòng).
+    /// </summary>
+    public void SaveState(bool closed = false, bool sync = false)
     {
+        string json; var dir = BackupDir;
         try
         {
             if (BackupDir.Length == 0) return;
@@ -599,12 +606,25 @@ public sealed class RoomService : IDisposable
                     MoveApproved = c.MoveApproved, TotalQuestions = c.TotalQuestions, CheatCount = c.CheatCount, Machine = c.Machine, Ip = c.Ip
                 }).ToList()
             };
-            var path = Path.Combine(BackupDir, StateFile);
-            var tmp = path + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(st, ExamPackage.Json));
-            File.Move(tmp, path, overwrite: true);
+            json = JsonSerializer.Serialize(st, ExamPackage.Json);
         }
-        catch { }
+        catch { return; }
+
+        void Write()
+        {
+            try
+            {
+                lock (_diskLock)
+                {
+                    var path = Path.Combine(dir, StateFile);
+                    var tmp = path + ".tmp";
+                    File.WriteAllText(tmp, json);
+                    File.Move(tmp, path, overwrite: true);
+                }
+            }
+            catch { }
+        }
+        if (sync) Write(); else Task.Run(Write);
     }
 
     /// <summary>Tìm phòng thi bị dừng đột ngột (chưa đóng phòng) trong 24 giờ qua, mới nhất trước.</summary>

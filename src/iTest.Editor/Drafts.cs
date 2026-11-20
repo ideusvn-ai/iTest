@@ -19,13 +19,28 @@ public sealed class Draft
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
-    public void Save()
+    private readonly object _writeLock = new();
+
+    /// <summary>
+    /// Lưu bản nháp. Mặc định dựng JSON ngay (ảnh chụp nội dung) rồi ghi đĩa ở luồng nền để không giật khi gõ;
+    /// đặt <paramref name="sync"/>=true khi cần ghi xong ngay (lúc thoát).
+    /// </summary>
+    public void Save(bool sync = false)
     {
-        Directory.CreateDirectory(Folder);
         SavedAt = DateTime.Now;
         // Mật khẩu bản nháp được lưu bằng DPAPI của Windows (chỉ người dùng hiện tại đọc được).
         var copy = new Draft { Id = Id, Exam = Exam, Locked = Locked, SavedAt = SavedAt, Password = Protect(Password) };
-        File.WriteAllText(Path.Combine(Folder, "draft.json"), JsonSerializer.Serialize(copy, Json));
+        var json = JsonSerializer.Serialize(copy, Json);
+        var folder = Folder;
+        void Write()
+        {
+            lock (_writeLock)
+            {
+                Directory.CreateDirectory(folder);
+                File.WriteAllText(Path.Combine(folder, "draft.json"), json);
+            }
+        }
+        if (sync) Write(); else Task.Run(() => { try { Write(); } catch { } });
     }
 
     public static List<Draft> All()

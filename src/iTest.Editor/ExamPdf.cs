@@ -24,21 +24,34 @@ public static class ExamPdf
     private static readonly CultureInfo Vi = CultureInfo.GetCultureInfo("vi-VN");
     private static string F(double v) => Math.Round(v, 2).ToString("0.##", Vi);
 
-    /// <summary>Phải gọi trên luồng giao diện (công thức được vẽ bằng WPF trước khi dựng PDF).</summary>
-    public static void Export(string path, ExamSet exam, string mediaFolder, PdfOptions o)
+    public sealed class Prepared
     {
-        // Bộ đề mẫu: in đúng thứ tự câu và phương án đã soạn (không trộn, không mã đề).
-        var chosen = Shuffler.Build(new ExamSet { Codes = 1, Questions = exam.Questions }).Take(1).ToList();
+        public Dictionary<string, (byte[] png, double w, double h)?> Formulas { get; } = new();
+    }
 
-        // Vẽ trước mọi công thức thành ảnh.
-        var formulas = new Dictionary<string, (byte[] png, double w, double h)?>();
+    /// <summary>
+    /// Vẽ trước mọi công thức toán thành ảnh PNG. PHẢI gọi trên luồng giao diện (dùng WPF để vẽ).
+    /// Trả về dữ liệu thuần để bước tạo PDF có thể chạy ở luồng nền.
+    /// </summary>
+    public static Prepared RenderFormulas(ExamSet exam)
+    {
+        var p = new Prepared();
         void Collect(string? s)
         {
             if (string.IsNullOrEmpty(s)) return;
             foreach (var seg in RichMath.Split(s))
-                if (seg.IsMath && !formulas.ContainsKey(seg.Text)) formulas[seg.Text] = RichMath.RenderPng(seg.Text, Fs);
+                if (seg.IsMath && !p.Formulas.ContainsKey(seg.Text)) p.Formulas[seg.Text] = RichMath.RenderPng(seg.Text, Fs);
         }
         foreach (var q in exam.Questions) { Collect(q.Text); q.Options.ForEach(Collect); Collect(q.Guide); }
+        return p;
+    }
+
+    /// <summary>Tạo file PDF. An toàn khi chạy ở luồng nền nếu <paramref name="prepared"/> đã được vẽ sẵn trên luồng giao diện.</summary>
+    public static void Export(string path, ExamSet exam, string mediaFolder, PdfOptions o, Prepared? prepared = null)
+    {
+        // Bộ đề mẫu: in đúng thứ tự câu và phương án đã soạn (không trộn, không mã đề).
+        var chosen = Shuffler.Build(new ExamSet { Codes = 1, Questions = exam.Questions }).Take(1).ToList();
+        var formulas = (prepared ?? RenderFormulas(exam)).Formulas;
 
         var byId = exam.Questions.ToDictionary(q => q.Id);
         var doc = Document.Create(container =>

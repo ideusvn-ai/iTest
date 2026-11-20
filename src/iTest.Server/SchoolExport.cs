@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using ClosedXML.Excel;
 using ITest.Core;
+using ITest.UI;
 using Microsoft.Win32;
 
 namespace ITest.Server;
@@ -168,7 +169,7 @@ public static class SchoolExport
     }
 
     // ---------------- Hộp thoại ----------------
-    public static void Run(Window owner, RoomService room)
+    public static async void Run(Window owner, RoomService room)
     {
         var dlg = new Window
         {
@@ -214,7 +215,8 @@ public static class SchoolExport
             {
                 var save = new SaveFileDialog { Filter = "Excel (*.xlsx)|*.xlsx", FileName = $"Diem_{room.Exam.Subject}_{safeRoom}.xlsx" };
                 if (save.ShowDialog(owner) != true) return;
-                WriteByClass(room, save.FileName, dec);
+                var p1 = save.FileName;
+                await Busy.Run(owner, "Đang tạo file điểm theo lớp…", () => WriteByClass(room, p1, dec));
                 room.Log("XUẤT FILE", "", $"Đã xuất điểm theo lớp · {System.IO.Path.GetFileName(save.FileName)}");
                 MessageBox.Show(owner, "Đã xuất file điểm:\n" + save.FileName, "Xuất điểm", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
@@ -222,7 +224,8 @@ public static class SchoolExport
 
             var open = new OpenFileDialog { Filter = "Excel (*.xlsx)|*.xlsx", Title = "Chọn file mẫu nhập điểm tải từ phần mềm quản lý trường" };
             if (open.ShowDialog(owner) != true) return;
-            var info = Analyze(open.FileName);
+            var tpl = open.FileName;
+            var info = await Busy.Run(owner, "Đang đọc file mẫu…", () => Analyze(tpl));
             if (info == null)
             {
                 MessageBox.Show(owner, "Không tìm thấy dòng tiêu đề có cột “Họ và tên” trong file mẫu.", "Xuất điểm", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -236,7 +239,8 @@ public static class SchoolExport
                 FileName = System.IO.Path.GetFileNameWithoutExtension(open.FileName) + "_DaDienDiem.xlsx"
             };
             if (outDlg.ShowDialog(owner) != true) return;
-            var rep = Fill(room, open.FileName, outDlg.FileName, info, col.Value, dec);
+            var outPath = outDlg.FileName; var scol = col.Value;
+            var rep = await Busy.Run(owner, "Đang điền điểm vào file mẫu…", () => Fill(room, tpl, outPath, info, scol, dec));
             room.Log("XUẤT FILE", "", $"Đã điền {rep.Matched} điểm vào file mẫu · {System.IO.Path.GetFileName(outDlg.FileName)}");
             var msg = $"Đã điền điểm cho {rep.Matched} học sinh vào sheet “{info.SheetName}”.\n";
             if (rep.RowsWithoutScore > 0) msg += $"\n{rep.RowsWithoutScore} dòng trong file mẫu không có điểm (học sinh không thi trong phòng này, chưa nộp hoặc bị huỷ kết quả).";

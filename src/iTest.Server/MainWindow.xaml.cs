@@ -141,7 +141,7 @@ public partial class MainWindow : Window
         RecoverBox.Visibility = Visibility.Collapsed;
     }
 
-    private void Recover_Click(object sender, RoutedEventArgs e)
+    private async void Recover_Click(object sender, RoutedEventArgs e)
     {
         if (_recover == null) return;
         if (PeerActive()) { Block(_peer!); return; }
@@ -162,7 +162,8 @@ public partial class MainWindow : Window
                 pw = Prompt.Show(this, "Khôi phục phòng thi", "Nhập mật khẩu bộ đề " + Path.GetFileName(st.PackagePath) + ":", "", password: true);
                 if (pw == null) return;
             }
-            pkg = ExamPackage.Load(st.PackagePath, pw);
+            var path = st.PackagePath;
+            pkg = await Busy.Run(this, "Đang mở lại bộ đề để khôi phục…", () => ExamPackage.Load(path, pw));
         }
         catch (CryptographicException) { MessageBox.Show(this, "Sai mật khẩu bộ đề.", "Khôi phục", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
         catch (Exception ex) { MessageBox.Show(this, "Không mở được bộ đề: " + ex.Message, "Khôi phục", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
@@ -533,23 +534,24 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(reason)) _room.RequestEdit(_sel, reason);
     }
 
-    private void Swap_Click(object sender, RoutedEventArgs e)
+    private async void Swap_Click(object sender, RoutedEventArgs e)
     {
         if (_room == null || _room.Phase != Phase.Open) return;
         var dlg = new OpenFileDialog { Filter = "Bộ đề iTest (*.itz)|*.itz", Title = "Đổi bộ đề" };
         if (dlg.ShowDialog(this) != true) return;
+        var file = dlg.FileName;
         try
         {
             string? pass = null;
-            if (ExamPackage.IsPasswordProtected(dlg.FileName))
+            if (ExamPackage.IsPasswordProtected(file))
             {
-                pass = Prompt.Show(this, "Mật khẩu bộ đề", $"Nhập mật khẩu của {Path.GetFileName(dlg.FileName)}:", "", password: true);
+                pass = Prompt.Show(this, "Mật khẩu bộ đề", $"Nhập mật khẩu của {Path.GetFileName(file)}:", "", password: true);
                 if (pass == null) return;
             }
-            var pkg = ExamPackage.Load(dlg.FileName, pass);
+            var pkg = await Busy.Run(this, "Đang giải mã và đọc bộ đề…", () => ExamPackage.Load(file, pass));
             var old = Path.GetFileName(_room.PackagePath);
-            _room.LoadPackage(pkg, dlg.FileName);
-            _room.Log("THÔNG TIN", "", $"Đổi bộ đề: {old} → {Path.GetFileName(dlg.FileName)} · {pkg.Exam.Minutes} phút · {pkg.Exam.Questions.Count} câu · {pkg.Exam.Codes} mã đề");
+            _room.LoadPackage(pkg, file);
+            _room.Log("THÔNG TIN", "", $"Đổi bộ đề: {old} → {Path.GetFileName(file)} · {pkg.Exam.Minutes} phút · {pkg.Exam.Questions.Count} câu · {pkg.Exam.Codes} mã đề");
             ShowPackage();
             Refresh();
         }

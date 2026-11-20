@@ -923,10 +923,22 @@ public partial class MainWindow : Window
     }
 
     // ---- Chống thoát ----
-    private void CheatScan()
+    private bool _scanning;
+    /// <summary>Quét gian lận chạy ở luồng nền (liệt kê tiến trình có thể chậm), không làm giật màn hình thi.</summary>
+    private async void CheatScan()
     {
         if (!_examRunning || _submitted) { _cheatTimer.Stop(); return; }
-        foreach (var f in AntiCheat.Scan(_exam?.AllowDocuments == true)) ReportCheat(f.Kind, f.Detail);
+        if (_scanning) return;
+        _scanning = true;
+        bool lenient = _exam?.AllowDocuments == true;
+        try
+        {
+            var findings = await Task.Run(() => AntiCheat.Scan(lenient));
+            if (_examRunning && !_submitted)
+                foreach (var f in findings) ReportCheat(f.Kind, f.Detail);
+        }
+        catch { }
+        finally { _scanning = false; }
     }
 
     /// <summary>Báo dấu hiệu gian lận lên máy chủ (mỗi nội dung chỉ báo một lần).</summary>
@@ -972,15 +984,27 @@ public partial class MainWindow : Window
     /// <summary>Gom các lần lưu (gõ phím liên tục) lại, ghi đĩa tối đa mỗi giây một lần.</summary>
     private void SaveLocal() { _saveDebounce.Stop(); _saveDebounce.Start(); }
 
+    private readonly object _localSaveLock = new();
     private void SaveLocalNow()
     {
         if (_submitted) return;
+        // Dựng ảnh chụp trên luồng giao diện rồi ghi đĩa ở luồng nền để không giật khi đang làm bài.
+        string json;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_localSave)!);
-            File.WriteAllText(_localSave, JsonSerializer.Serialize(new { sbd = _info.Sbd, code = _exam?.Code, choices = _choices, essays = _essays, multi = _multi, tf = _tf, shortAns = _short }));
+            json = JsonSerializer.Serialize(new { sbd = _info.Sbd, code = _exam?.Code,
+                choices = new Dictionary<int, int>(_choices), essays = new Dictionary<int, string>(_essays),
+                multi = _multi.ToDictionary(kv => kv.Key, kv => kv.Value.ToList()),
+                tf = _tf.ToDictionary(kv => kv.Key, kv => new Dictionary<int, bool>(kv.Value)),
+                shortAns = new Dictionary<int, string>(_short) });
         }
-        catch { }
+        catch { return; }
+        var path = _localSave;
+        Task.Run(() =>
+        {
+            try { lock (_localSaveLock) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); File.WriteAllText(path, json); } }
+            catch { }
+        });
     }
 
     private void LoadLocalSave()
