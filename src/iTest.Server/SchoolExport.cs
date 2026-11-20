@@ -224,8 +224,8 @@ public static class SchoolExport
 
             var open = new OpenFileDialog { Filter = "Excel (*.xlsx)|*.xlsx", Title = "Chọn file mẫu nhập điểm tải từ phần mềm quản lý trường" };
             if (open.ShowDialog(owner) != true) return;
-            var tpl = open.FileName;
-            var info = await Busy.Run(owner, "Đang đọc file mẫu…", () => Analyze(tpl));
+            var tplPath = open.FileName;
+            var info = await Busy.Run(owner, "Đang đọc file mẫu…", () => Analyze(tplPath));
             if (info == null)
             {
                 MessageBox.Show(owner, "Không tìm thấy dòng tiêu đề có cột “Họ và tên” trong file mẫu.", "Xuất điểm", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -240,7 +240,7 @@ public static class SchoolExport
             };
             if (outDlg.ShowDialog(owner) != true) return;
             var outPath = outDlg.FileName; var scol = col.Value;
-            var rep = await Busy.Run(owner, "Đang điền điểm vào file mẫu…", () => Fill(room, tpl, outPath, info, scol, dec));
+            var rep = await Busy.Run(owner, "Đang điền điểm vào file mẫu…", () => Fill(room, tplPath, outPath, info, scol, dec));
             room.Log("XUẤT FILE", "", $"Đã điền {rep.Matched} điểm vào file mẫu · {System.IO.Path.GetFileName(outDlg.FileName)}");
             var msg = $"Đã điền điểm cho {rep.Matched} học sinh vào sheet “{info.SheetName}”.\n";
             if (rep.RowsWithoutScore > 0) msg += $"\n{rep.RowsWithoutScore} dòng trong file mẫu không có điểm (học sinh không thi trong phòng này, chưa nộp hoặc bị huỷ kết quả).";
