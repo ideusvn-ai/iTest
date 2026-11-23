@@ -33,6 +33,10 @@ public static class KioskGuard
     public static event Action<string>? Blocked;
 
     private const string PolicyKey = @"Software\Microsoft\Windows\CurrentVersion\Policies\System";
+    // Dấu "iTest là bên đã tắt Task Manager": chỉ khi có dấu này iTest mới bật lại, để không gỡ nhầm chính sách do
+    // quản trị phòng máy đặt sẵn, và để lần chạy sau dọn được nếu lần này bị tắt đột ngột.
+    private const string MarkerKey = @"Software\iTest";
+    private const string MarkerName = "TaskMgrLockedByITest";
 
     public static void Enter()
     {
@@ -44,7 +48,13 @@ public static class KioskGuard
         try
         {
             using var k = Registry.CurrentUser.CreateSubKey(PolicyKey);
-            k?.SetValue("DisableTaskMgr", 1, RegistryValueKind.DWord);
+            bool alreadyOff = k?.GetValue("DisableTaskMgr") is int v && v == 1;
+            if (k != null && !alreadyOff)
+            {
+                using var mk = Registry.CurrentUser.CreateSubKey(MarkerKey);
+                mk?.SetValue(MarkerName, 1, RegistryValueKind.DWord);
+                k.SetValue("DisableTaskMgr", 1, RegistryValueKind.DWord);
+            }
         }
         catch { }
     }
@@ -52,10 +62,21 @@ public static class KioskGuard
     public static void Leave()
     {
         if (_hook != IntPtr.Zero) { UnhookWindowsHookEx(_hook); _hook = IntPtr.Zero; }
+        RestoreTaskManager();
+    }
+
+    /// <summary>Gọi khi khởi động: nếu lần chạy trước kết thúc đột ngột lúc đang khoá, bật lại Task Manager.</summary>
+    public static void RecoverFromCrash() => RestoreTaskManager();
+
+    private static void RestoreTaskManager()
+    {
         try
         {
+            using var mk = Registry.CurrentUser.OpenSubKey(MarkerKey, writable: true);
+            if (mk?.GetValue(MarkerName) == null) return;   // không phải iTest tắt: không đụng vào
             using var k = Registry.CurrentUser.OpenSubKey(PolicyKey, writable: true);
             k?.DeleteValue("DisableTaskMgr", throwOnMissingValue: false);
+            mk.DeleteValue(MarkerName, throwOnMissingValue: false);
         }
         catch { }
     }

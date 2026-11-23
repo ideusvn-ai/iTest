@@ -48,6 +48,8 @@ public sealed class BeaconListener : IDisposable
     private UdpClient? _udp;
     private readonly CancellationTokenSource _cts = new();
     public event Action<RoomBeacon>? Found;
+    /// <summary>Một máy khác báo: nó vừa mở iTest-Server và thấy phòng thi của máy này (ServerId = phòng được báo).</summary>
+    public event Action<RoomBeacon>? DuplicateReported;
     public string Workgroup { get; } = NetUtil.GetWorkgroup();
 
     public void Start()
@@ -63,7 +65,14 @@ public sealed class BeaconListener : IDisposable
                 {
                     var r = await _udp.ReceiveAsync(_cts.Token);
                     var b = JsonSerializer.Deserialize<RoomBeacon>(r.Buffer, ExamPackage.Json);
-                    if (b == null || b.App != "iTest") continue;
+                    if (b == null) continue;
+                    if (b.App == NetUtil.DupApp)
+                    {
+                        if (string.IsNullOrEmpty(b.Address)) b.Address = r.RemoteEndPoint.Address.ToString();
+                        DuplicateReported?.Invoke(b);
+                        continue;
+                    }
+                    if (b.App != "iTest") continue;
                     if (!string.Equals(b.Workgroup, Workgroup, StringComparison.OrdinalIgnoreCase)) continue;
                     if (string.IsNullOrEmpty(b.Address)) b.Address = r.RemoteEndPoint.Address.ToString();
                     if (string.IsNullOrEmpty(b.ServerId)) b.ServerId = b.Address;
@@ -141,4 +150,24 @@ public static class NetUtil
     }
 
     public static string LocalIPv4() => Primary().Address.ToString();
+
+    public const string DupApp = "iTest-Server-Dup";
+
+    /// <summary>
+    /// Báo cho máy chủ đang mở phòng (theo <paramref name="targetServerId"/>) biết máy này vừa mở iTest-Server.
+    /// Gửi bằng UDP vì kênh TCP chỉ dành cho máy biết mã phòng thi.
+    /// </summary>
+    public static void SendDuplicateNotice(string targetAddress, string targetServerId)
+    {
+        try
+        {
+            var nic = Primary();
+            var note = new RoomBeacon { App = DupApp, ServerId = targetServerId, Host = Environment.MachineName, Address = nic.Address.ToString(), Workgroup = GetWorkgroup() };
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(note, ExamPackage.Json);
+            using var udp = new UdpClient(new IPEndPoint(nic.Address, 0)) { EnableBroadcast = true };
+            if (IPAddress.TryParse(targetAddress, out var ip)) udp.Send(bytes, bytes.Length, new IPEndPoint(ip, Ports.Discovery));
+            udp.Send(bytes, bytes.Length, new IPEndPoint(nic.Broadcast, Ports.Discovery));
+        }
+        catch { }
+    }
 }

@@ -130,6 +130,15 @@ bộ gõ TELEX/VNI và kết nối mã hoá. GitHub Actions chạy bộ kiểm t
   **Ctrl+Alt+Del không thể chặn** bằng phần mềm thường; mọi lần cửa sổ mất tiêu điểm đều được báo về máy chủ.
 - Bài làm được lưu ở máy chủ sau mỗi thao tác, sao lưu mỗi 30 giây vào `Documents\iTest-Server\SaoLuu\`, và lưu tạm trên máy thí sinh.
 
+## Khi có sự cố trong buổi thi
+- **Máy thí sinh mất mạng**: máy tự kết nối lại ở mọi trạng thái (phòng chờ, đang làm bài, đã nộp). Bài làm trên máy thí sinh là bản mới nhất
+  và được gửi lại đầy đủ khi có mạng; máy chủ bù giờ cho thời gian mất kết nối. Hết giờ đúng lúc đang mất mạng thì máy chờ thêm tối đa 2 phút rồi mới tự nộp.
+- **Đã nộp bài nhưng máy chủ không còn liên lạc được quá 1 phút**: máy thí sinh tự mở khoá và hiện nút *Thoát ứng dụng* (không bị khoá vô thời hạn).
+- **iTest bị tắt đột ngột khi đang khoá máy** (mất điện, treo máy): lần mở iTest kế tiếp tự bật lại Task Manager.
+- **Lỗi ngoài dự kiến**: cả ba ứng dụng ghi lỗi vào `%LocalAppData%\<tên ứng dụng>\loi.log` và chạy tiếp thay vì đóng sập. Gửi file này khi cần hỗ trợ.
+- **Bộ gõ tiếng Việt** có sẵn (TELEX/VNI) có thể **tắt** — trong Editor ở góc trên phải, trên máy thí sinh ở nút ⚙ — khi soạn/làm bài tiếng Anh
+  hoặc khi máy đã bật Unikey. Trong công thức `$...$` bộ gõ tự không bỏ dấu.
+
 ## Giới hạn còn lại
 - Công thức MathType/Equation trong file Word nhập vào được giữ ở dạng văn bản; nên soạn lại bằng nút ∑ (LaTeX).
 - Nhập từ Word mới nhận câu 1 đáp án và tự luận; các loại câu mới nhập qua Excel hoặc chọn *Loại câu* trong Editor.

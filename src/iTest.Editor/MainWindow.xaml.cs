@@ -48,10 +48,31 @@ public partial class MainWindow : Window
         EGuide.GotKeyboardFocus += (_, _) => _mathTarget = EGuide;
         VietInput.Attach(EShortKey);
         PreviewKeyDown += FastEntryKeys;
-        RefreshDrafts();
+        LoadIme();
         UpdateFormTotal();
         Closing += (_, _) => { if (_draft != null) { _draft.Save(sync: true); RememberSession(); } };
+        // Mở lại phiên trước rồi mới dọn bản nháp rác, để bản nháp đang soạn dở (kể cả còn trống) không bị xoá nhầm.
         RestoreSession();
+        RefreshDrafts();
+    }
+
+    // ===================== Bộ gõ tiếng Việt =====================
+    private static readonly string ImeFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "iTest-Editor", "bo-go.txt");
+
+    private void LoadIme()
+    {
+        string mode = "telex";
+        try { if (File.Exists(ImeFile)) mode = File.ReadAllText(ImeFile).Trim(); } catch { }
+        foreach (ComboBoxItem it in ImeBox.Items) if ((string)it.Tag == mode) ImeBox.SelectedItem = it;
+        if (ImeBox.SelectedItem == null) ImeBox.SelectedIndex = 0;
+    }
+
+    private void Ime_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (ImeBox?.SelectedItem is not ComboBoxItem { Tag: string mode }) return;
+        VietInput.Enabled = mode != "off";
+        VietInput.Mode = mode == "vni" ? ImeMode.Vni : ImeMode.Telex;
+        try { Directory.CreateDirectory(Path.GetDirectoryName(ImeFile)!); File.WriteAllText(ImeFile, mode); } catch { }
     }
 
     // ===================== Trang đầu =====================
@@ -91,11 +112,16 @@ public partial class MainWindow : Window
         FPassMsg.Text = FPass2.Password.Length == 0 ? "Nhập lại mật khẩu để xác nhận" : FPass.Password == FPass2.Password ? "✓ Mật khẩu khớp" : "Mật khẩu xác nhận không khớp";
     }
 
+    /// <summary>Khung đề chưa có nội dung nào (chưa gõ câu hỏi, phương án, chưa gắn ảnh/âm thanh).</summary>
+    private static bool IsBlank(Draft d) => d.Exam.Questions.All(q =>
+        string.IsNullOrWhiteSpace(q.Text) && q.Image == null && q.Audio == null && string.IsNullOrWhiteSpace(q.Guide) && string.IsNullOrWhiteSpace(q.ShortKey)
+        && (q.Type == QuestionType.YesNo || q.Options.All(string.IsNullOrWhiteSpace)));
+
     private void RefreshDrafts()
     {
-        // Dọn bản nháp rác: khung đề trống (chưa gõ câu nào), không phải bản đang mở.
+        // Dọn bản nháp rác: khung đề trống (chưa gõ gì), không phải bản đang mở.
         foreach (var d in Draft.All())
-            if (d.Id != _draft?.Id && d.Exam.Questions.Count > 0 && d.Exam.Questions.All(q => string.IsNullOrWhiteSpace(q.Text) && q.Image == null && q.Audio == null))
+            if (d.Id != _draft?.Id && IsBlank(d))
                 d.Delete();
         var items = Draft.All().Select(d => new DraftItem(d)).ToList();
         DraftList.ItemsSource = items;
@@ -106,9 +132,11 @@ public partial class MainWindow : Window
     {
         if ((sender as FrameworkElement)?.Tag is not DraftItem di) return;
         if (MessageBox.Show(this, $"Xoá bản nháp “{di.Title}”? Không thể hoàn tác.", "Xoá bản nháp", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-        if (di.Draft.Id == _draft?.Id) _draft = null;
+        bool current = di.Draft.Id == _draft?.Id;
+        if (current) { _draft?.Delete(); _draft = null; }
         di.Draft.Delete();
-        RefreshDrafts();
+        if (current && _editingMeta) { FillForm(null, null); ShowHome(false); }
+        else RefreshDrafts();
     }
 
     private void DeleteAllDrafts_Click(object sender, RoutedEventArgs e)
@@ -116,9 +144,11 @@ public partial class MainWindow : Window
         var all = Draft.All();
         if (all.Count == 0) return;
         if (MessageBox.Show(this, $"Xoá tất cả {all.Count} bản nháp chưa đóng gói? Không thể hoàn tác.", "Xoá tất cả bản nháp", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        _draft?.Delete();
         foreach (var d in all) d.Delete();
         _draft = null;
-        RefreshDrafts();
+        if (_editingMeta) { FillForm(null, null); ShowHome(false); }
+        else RefreshDrafts();
     }
 
     private void Create_Click(object sender, RoutedEventArgs e)
@@ -195,7 +225,8 @@ public partial class MainWindow : Window
 
     private void NewSet_Click(object sender, RoutedEventArgs e)
     {
-        if (_draft != null) SaveNow();
+        // Khung đề còn trống thì bỏ luôn; đã có nội dung thì lưu chắc chắn trước khi rời đi.
+        if (_draft != null) { if (IsBlank(_draft)) _draft.Delete(); else _draft.Save(sync: true); }
         var author = _draft?.Exam.Author; var unit = _draft?.Exam.Unit;
         _draft = null;
         FillForm(null, null);
@@ -846,7 +877,10 @@ public partial class MainWindow : Window
         try
         {
             x.CreatedAt = DateTime.Now;
-            await Busy.Run(this, "Đang mã hoá và đóng gói bộ đề…", () => ExamPackage.Save(path, x, draft.LoadMedia(), pass));
+            // Chỉ đóng gói ảnh/âm thanh mà câu hỏi còn dùng (file đã gỡ khỏi câu hỏi không được lọt vào bộ đề).
+            var used = x.Questions.SelectMany(q => new[] { q.Image, q.Audio }).Where(n => n != null).ToHashSet();
+            await Busy.Run(this, "Đang mã hoá và đóng gói bộ đề…", () =>
+                ExamPackage.Save(path, x, draft.LoadMedia().Where(kv => used.Contains(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value), pass));
             _packed = true;
             RememberSession();
             MessageBox.Show(this, $"Đã đóng gói bộ đề:\n{dlg.FileName}\n\n{(_draft.Locked ? "Hãy gửi mật khẩu cho giám thị qua kênh riêng." : "Bộ đề không đặt mật khẩu.")}",

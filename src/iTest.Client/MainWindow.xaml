@@ -125,7 +125,7 @@
                                 <Ellipse x:Name="Spinner" Width="20" Height="20" StrokeThickness="3" Stroke="{StaticResource Primary}" StrokeDashArray="3 2" RenderTransformOrigin="0.5,0.5">
                                     <Ellipse.RenderTransform><RotateTransform/></Ellipse.RenderTransform>
                                 </Ellipse>
-                                <TextBlock Text="Đang chờ giám thị phát đề…" Margin="12,0,0,0" FontWeight="SemiBold" Foreground="#1E3A8A" FontSize="15"/>
+                                <TextBlock x:Name="WaitText" Text="Đang chờ giám thị phát đề…" Margin="12,0,0,0" FontWeight="SemiBold" Foreground="#1E3A8A" FontSize="15"/>
                             </StackPanel>
                         </Border>
                         <Border x:Name="EditReqBox" Visibility="Collapsed" Margin="0,12,0,0" Background="{StaticResource WarnSoft}" BorderBrush="#FCD34D" BorderThickness="1" CornerRadius="12" Padding="12">
@@ -170,7 +170,9 @@
                         <TextBlock Text="KIỂU GÕ TIẾNG VIỆT" Style="{StaticResource FieldLabel}"/>
                         <StackPanel Orientation="Horizontal">
                             <RadioButton x:Name="ImeTelex" Content="TELEX" GroupName="ime" IsChecked="True" Margin="0,0,20,0" Checked="Ime_Changed"/>
-                            <RadioButton x:Name="ImeVni" Content="VNI" GroupName="ime" Checked="Ime_Changed"/>
+                            <RadioButton x:Name="ImeVni" Content="VNI" GroupName="ime" Margin="0,0,20,0" Checked="Ime_Changed"/>
+                            <RadioButton x:Name="ImeOff" Content="Tắt" GroupName="ime" Checked="Ime_Changed"
+                                         ToolTip="Tắt bộ gõ của iTest: dùng khi làm bài tiếng Anh, hoặc khi máy đã bật Unikey"/>
                         </StackPanel>
                         <TextBlock x:Name="ImeHint" Style="{StaticResource Hint}" Margin="0,4,0,0"/>
                         <TextBlock Text="CỠ CHỮ ĐỀ THI" Style="{StaticResource FieldLabel}"/>

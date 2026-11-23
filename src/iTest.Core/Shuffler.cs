@@ -78,7 +78,12 @@ public static class Shuffler
             if (q.Type.HasOptions())
                 cq.Options = layout.PermOf(q).Select(i => q.Options[i]).ToList();
             if (q.Image != null && media.TryGetValue(q.Image, out var img)) cq.ImageBase64 = Convert.ToBase64String(img);
-            if (q.Audio != null && media.TryGetValue(q.Audio, out var aud)) cq.AudioBase64 = Convert.ToBase64String(aud);
+            if (q.Audio != null && media.TryGetValue(q.Audio, out var aud))
+            {
+                cq.AudioBase64 = Convert.ToBase64String(aud);
+                var ext = System.IO.Path.GetExtension(q.Audio).ToLowerInvariant();
+                cq.AudioExt = ext is ".mp3" or ".wav" or ".m4a" ? ext : ".mp3";
+            }
             ce.Questions.Add(cq);
         }
         return ce;

@@ -48,12 +48,16 @@ public static class Busy
         }
         var ui = System.Threading.SynchronizationContext.Current;
         void Report(string m) => ui?.Post(_ => text.Text = m, null);
+        // Trong lúc xử lý, chặn bàn phím (lớp phủ chỉ chặn được chuột) để nội dung không bị sửa giữa chừng.
+        void Swallow(object s, System.Windows.Input.KeyEventArgs e) => e.Handled = true;
+        w.PreviewKeyDown += Swallow;
         try
         {
             return await Task.Run(() => work(Report)).ConfigureAwait(true);
         }
         finally
         {
+            w.PreviewKeyDown -= Swallow;
             root?.Children.Remove(overlay);
         }
     }

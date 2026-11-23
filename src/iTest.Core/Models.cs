@@ -196,6 +196,8 @@ public sealed class ClientQuestion
     public double Points { get; set; }
     public string? ImageBase64 { get; set; }
     public string? AudioBase64 { get; set; }
+    /// <summary>Phần mở rộng file âm thanh gốc (.mp3, .wav, .m4a) để máy thí sinh phát đúng định dạng.</summary>
+    public string AudioExt { get; set; } = ".mp3";
     public int AudioMaxPlays { get; set; } = 2;
 }
 

@@ -24,8 +24,7 @@ public static class Msg
     public const string Submit = "submit";
     public const string Focus = "focus";          // lost: bool, reason
     public const string AnswerEx = "answerEx";    // AnswerEx: câu nhiều đáp án / Đúng-Sai / trả lời ngắn
-    public const string Cheat = "cheat";
-    public const string DupServer = "dupServer";  // machine, ip: một máy khác vừa mở iTest-Server trong cùng mạng          // kind, detail: dấu hiệu gian lận phát hiện trên máy thí sinh
+    public const string Cheat = "cheat";          // kind, detail: dấu hiệu gian lận phát hiện trên máy thí sinh
     public const string Ping = "ping";            // nhịp tim mỗi 3 giây
     public const string Pong = "pong";            // S → C: trả lời nhịp tim
     // S → C
@@ -72,7 +71,7 @@ public sealed class RoomBeacon
 /// <summary>
 /// Kết nối TCP được mã hoá đầu-cuối:
 ///  1. Bắt tay: mỗi bên gửi khung rõ "ITS1" + khoá công khai ECDH P-256 tạm thời.
-///  2. Khoá phiên AES-256 = SHA-256(bí mật chung ECDH ‖ "iTest-session-v1").
+///  2. Khoá phiên AES-256 = SHA-256(bí mật chung ECDH ‖ "iTest-session-v1:" ‖ mã phòng thi).
 ///  3. Mỗi khung tin: 4 byte độ dài | nonce 12 byte (vai trò + bộ đếm) | thẻ GCM 16 byte | bản mã JSON UTF-8.
 /// Người nghe lén trong mạng LAN không đọc được đề thi và bài làm; khung bị sửa sẽ bị loại.
 /// </summary>
@@ -118,7 +117,14 @@ public sealed class Connection : IDisposable
     {
         try
         {
-            await HandshakeAsync().ConfigureAwait(false);
+            // Bắt tay phải xong trong 10 giây: kết nối mở rồi im lặng (quét cổng, máy treo) sẽ bị đóng, không chiếm chỗ mãi.
+            var hs = HandshakeAsync();
+            if (await Task.WhenAny(hs, Task.Delay(10000)).ConfigureAwait(false) != hs)
+            {
+                _ = hs.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+                throw new TimeoutException();
+            }
+            await hs.ConfigureAwait(false);
             _ready.TrySetResult(true);
             _ = Task.Run(WriteLoop);
             var lenBuf = new byte[4];
@@ -253,9 +259,20 @@ public sealed class Connection : IDisposable
 
 public static class JsonExt
 {
-    public static string Str(this JsonObject o, string key) => o[key]?.GetValue<string>() ?? "";
+    /// <summary>Đọc chuỗi; trả về "" nếu thiếu hoặc sai kiểu (không ném lỗi với dữ liệu lạ từ mạng).</summary>
+    public static string Str(this JsonObject o, string key) => o[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s ?? "" : "";
+    public static double Dbl(this JsonObject o, string key) => o[key] is JsonValue v && v.TryGetValue<double>(out var d) ? d : 0;
     public static int Int(this JsonObject o, string key, int def = 0) => o[key] is JsonValue v && v.TryGetValue<int>(out var i) ? i : def;
     public static bool Bool(this JsonObject o, string key) => o[key] is JsonValue v && v.TryGetValue<bool>(out var b) && b;
-    public static T? As<T>(this JsonObject o, string key) => o[key] is JsonNode n ? n.Deserialize<T>(ExamPackage.Json) : default;
-    public static T? As<T>(this JsonObject o) => o.Deserialize<T>(ExamPackage.Json);
+    /// <summary>Đọc một đối tượng; trả về mặc định nếu dữ liệu sai định dạng.</summary>
+    public static T? As<T>(this JsonObject o, string key)
+    {
+        try { return o[key] is JsonNode n ? n.Deserialize<T>(ExamPackage.Json) : default; }
+        catch (JsonException) { return default; }
+    }
+    public static T? As<T>(this JsonObject o)
+    {
+        try { return o.Deserialize<T>(ExamPackage.Json); }
+        catch (JsonException) { return default; }
+    }
 }

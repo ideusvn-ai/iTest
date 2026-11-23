@@ -22,12 +22,25 @@ public static class VietInput
     {
         if (!Enabled || sender is not TextBox box || e.Text.Length != 1) return;
         if (box.SelectionLength > 0) return;
+        if (InsideFormula(box.Text, box.CaretIndex)) return;   // đang gõ công thức LaTeX giữa hai dấu $: không bỏ dấu
         if (VietIme.Process(box.Text, box.CaretIndex, e.Text[0], Mode, out var text, out var caret))
         {
             box.Text = text;
             box.CaretIndex = caret;
             e.Handled = true;
         }
+    }
+
+    /// <summary>Con trỏ đang nằm trong một công thức $...$ chưa đóng (số dấu $ đứng trước là số lẻ; \$ không tính).</summary>
+    public static bool InsideFormula(string text, int caret)
+    {
+        bool inside = false;
+        for (int i = 0; i < caret && i < text.Length; i++)
+        {
+            if (text[i] == '\\' && i + 1 < text.Length && text[i + 1] == '$') { i++; continue; }
+            if (text[i] == '$') inside = !inside;
+        }
+        return inside;
     }
 
     /// <summary>Chèn một ký hiệu tại vị trí con trỏ.</summary>

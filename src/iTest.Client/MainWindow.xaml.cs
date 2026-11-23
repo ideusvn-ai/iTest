@@ -33,6 +33,15 @@ public partial class MainWindow : Window
     private bool _released;
     private bool _registered;
     private string _sessionToken = "";
+    private bool _awaitingWelcome;     // đã kết nối, đang chờ máy chủ xác nhận (đúng mã phòng mới giải mã được)
+    private bool _offline;             // đã đăng ký nhưng đang mất kết nối với máy chủ
+    private DateTime _offlineSince;
+    private bool _reconnecting;
+    private int _zeroHold;             // số giây đã giữ ở 00:00 khi mất kết nối (chờ máy chủ bù giờ)
+    private readonly string _mediaDir = Path.Combine(Path.GetTempPath(), "iTest_" + Guid.NewGuid().ToString("N"));
+    private readonly Dictionary<int, string> _audioFiles = new();
+    private readonly Dictionary<int, int> _audioPlays = new();
+    private readonly MediaPlayer _player = new();
     private readonly Dictionary<int, int> _choices = new();
     private readonly Dictionary<int, string> _essays = new();
     private readonly Dictionary<int, HashSet<int>> _multi = new();
@@ -87,13 +96,7 @@ public partial class MainWindow : Window
         _cheatTimer.Tick += (_, _) => CheatScan();
         _essayFlush.Tick += (_, _) => FlushEssays();
         _saveDebounce.Tick += (_, _) => { _saveDebounce.Stop(); SaveLocalNow(); };
-        _heartbeat.Tick += (_, _) =>
-        {
-            if (_conn == null) return;
-            _conn.Send(Msg.Ping);
-            // Không nhận được gì từ máy chủ quá 12 giây khi đang thi: chủ động ngắt để kết nối lại.
-            if (_examRunning && !_submitted && (DateTime.Now - _lastRx).TotalSeconds > 12) _conn.Close();
-        };
+        _heartbeat.Tick += (_, _) => OnHeartbeat();
         _heartbeat.Start();
         KioskGuard.Blocked += what => Dispatcher.BeginInvoke(() => _conn?.Send(Msg.Focus, new { lost = true, reason = "Bấm " + what }));
         Deactivated += OnDeactivated;
@@ -138,35 +141,77 @@ public partial class MainWindow : Window
     }
 
     private string _pin = "";
+    private bool _connecting;
     private async Task ConnectTo(RoomBeacon b)
     {
+        if (_connecting || _awaitingWelcome) return;
         FindError.Text = "";
         var pin = PinBox.Text.Trim();
         if (pin.Length == 0) { FindError.Text = "Nhập mã phòng thi do giám thị đọc."; return; }
         _pin = pin;
+        _connecting = true;
+        ScanText.Text = "Đang kết nối và kiểm tra mã phòng thi…";
         try
         {
-            var c = await Connection.ConnectAsync(b.Address, b.Port, _pin);
-            AttachConnection(c);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+            var c = await Connection.ConnectAsync(b.Address, b.Port, _pin, cts.Token);
             _room = b;
+            _registered = false;
+            _awaitingWelcome = true;
+            AttachConnection(c);
             SendHello(c);
             RoomLine.Text = $"{b.Room} · {b.Exam} · Giám thị: {b.Proctor}";
-            FindPanel.Visibility = Visibility.Collapsed;
-            Anim.Show(InfoPanel);
+            // Chỉ khi nhận được lời chào (giải mã được = đúng mã phòng) mới sang bước nhập thông tin.
+            _ = Task.Delay(6000).ContinueWith(_ => Dispatcher.BeginInvoke(() => { if (_awaitingWelcome && _conn == c) c.Close(); }));
         }
+        catch (OperationCanceledException) { FindError.Text = "Không kết nối được máy chủ (hết thời gian chờ). Kiểm tra địa chỉ và mạng LAN."; }
         catch (Exception ex) { FindError.Text = "Không kết nối được máy chủ: " + ex.Message; }
+        finally { _connecting = false; }
     }
 
     private void SendHello(Connection c) =>
         c.Send(Msg.Hello, new { machine = Environment.MachineName, workgroup = _listener.Workgroup, ip = NetUtil.LocalIPv4(), token = _sessionToken });
 
+    private object RegisterPayload() => new { _info.Sbd, _info.FullName, _info.BirthDate, _info.ClassName, token = _sessionToken };
+
     private void AttachConnection(Connection c)
     {
         _conn = c;
         _lastRx = DateTime.Now;
-        c.Received += (_, m) => { _lastRx = DateTime.Now; if (m.Str("t") != Msg.Pong) Dispatcher.BeginInvoke(() => OnMessage(m)); };
-        c.Closed += _ => Dispatcher.BeginInvoke(OnDisconnected);
+        c.Received += (_, m) => { _lastRx = DateTime.Now; if (m.Str("t") != Msg.Pong) Dispatcher.BeginInvoke(() => { if (c == _conn) OnMessage(m); }); };
+        c.Closed += _ => Dispatcher.BeginInvoke(() => OnDisconnected(c));
         c.Start();
+    }
+
+    private void OnHeartbeat()
+    {
+        // Phòng thi không còn quảng bá quá 10 giây thì bỏ khỏi danh sách tìm phòng.
+        if (FindPanel.Visibility == Visibility.Visible)
+        {
+            var stale = _rooms.Where(r => (DateTime.Now - r.LastSeen).TotalSeconds > 10).ToList();
+            foreach (var r in stale) _rooms.Remove(r);
+            if (stale.Count > 0 && !_connecting && !_awaitingWelcome)
+                ScanText.Text = _rooms.Count == 0 ? $"Đang dò máy chủ iTest-Server cùng workgroup {_listener.Workgroup}…" : $"Tìm thấy {_rooms.Count} phòng thi trong mạng LAN";
+        }
+        if (_conn != null)
+        {
+            _conn.Send(Msg.Ping);
+            // Đã vào phòng mà không nhận được gì từ máy chủ quá 12 giây: chủ động ngắt để kết nối lại.
+            if (_registered && !_released && (DateTime.Now - _lastRx).TotalSeconds > 12) _conn.Close();
+        }
+        // Đã nộp bài nhưng mất liên lạc với máy chủ hơn 1 phút: không giữ khoá máy vô thời hạn.
+        if (_submitted && _offline && !_released && (DateTime.Now - _offlineSince).TotalSeconds > 60) OfferExitOffline();
+    }
+
+    /// <summary>Đã nộp bài, máy chủ không còn liên lạc được: mở khoá để thí sinh thoát sau khi báo giám thị.</summary>
+    private void OfferExitOffline()
+    {
+        _released = true;
+        KioskGuard.Leave();
+        Topmost = false;
+        WaitTitle.Text = "Mất kết nối với máy chủ";
+        WaitSub.Text = "Bài làm của bạn đã được nộp và lưu lại. Hãy báo giám thị, sau đó có thể thoát ứng dụng.";
+        ExitBtn.Visibility = Visibility.Visible;
     }
 
     // =================== 2. Thông tin thí sinh ===================
@@ -194,7 +239,8 @@ public partial class MainWindow : Window
         if (AgreeBox.IsChecked != true) { InfoError.Text = "Bạn cần xác nhận cam kết tuân thủ nội quy."; return; }
         InfoError.Text = "";
         _info = new CandidateInfo { Sbd = SbdBox.Text.Trim(), FullName = NameBox.Text.Trim(), BirthDate = DobBox.Text, ClassName = ClassBox.Text.Trim() };
-        _conn?.Send(Msg.Register, new { _info.Sbd, _info.FullName, _info.BirthDate, _info.ClassName, token = _sessionToken });
+        if (_conn == null) { InfoError.Text = "Chưa kết nối được máy chủ. Vui lòng chờ kết nối lại."; return; }
+        _conn.Send(Msg.Register, RegisterPayload());
     }
 
     private void SetInfoLocked(bool locked)
@@ -202,7 +248,7 @@ public partial class MainWindow : Window
         foreach (var tb in new[] { SbdBox, NameBox, DobBox, ClassBox }) tb.IsEnabled = !locked;
         AgreeBox.IsEnabled = !locked;
         RegisterBtn.Visibility = locked ? Visibility.Collapsed : Visibility.Visible;
-        QuitInfoBtn.Visibility = locked || _registered ? Visibility.Collapsed : Visibility.Visible;
+        QuitInfoBtn.Visibility = (locked || _registered) && !_offline ? Visibility.Collapsed : Visibility.Visible;
         WaitBox.Visibility = locked ? Visibility.Visible : Visibility.Collapsed;
         if (locked)
         {
@@ -225,13 +271,27 @@ public partial class MainWindow : Window
         {
             case Msg.Welcome:
                 RoomLine.Text = $"{m.Str("room")} · {m.Str("exam")} · Giám thị: {m.Str("proctor")}";
+                if (_awaitingWelcome)
+                {
+                    _awaitingWelcome = false;
+                    FindPanel.Visibility = Visibility.Collapsed;
+                    Anim.Show(InfoPanel);
+                }
                 break;
             case Msg.Registered:
                 _registered = true;
                 _sessionToken = m.Str("token");
-                SetInfoLocked(true);
+                if (!_examRunning) SetInfoLocked(true);
+                if (_offline) SetOffline(false);   // máy chủ đã nhận lại phiên: hết trạng thái mất kết nối
                 break;
             case Msg.Reject:
+                if (_examRunning)
+                {
+                    // Máy chủ chưa nhận ra phiên cũ đã mất: ngắt và thử lại sau vài giây (vòng kết nối lại sẽ lo).
+                    _conn?.Close();
+                    break;
+                }
+                _registered = false;
                 InfoError.Text = m.Str("reason");
                 SetInfoLocked(false);
                 break;
@@ -240,28 +300,41 @@ public partial class MainWindow : Window
                 Anim.Show(EditReqBox);
                 break;
             case Msg.Exam:
-                _exam = m.As<ClientExam>("exam");
+                if (_submitted)
+                {
+                    // Đã nộp bài nhưng máy chủ chưa ghi nhận (rớt mạng đúng lúc nộp): nộp lại, không mở lại đề.
+                    _conn?.Send(Msg.Submit, new { auto = true });
+                    break;
+                }
+                var exam = m.As<ClientExam>("exam");
+                if (exam == null || exam.Questions.Count == 0) break;
+                _exam = exam;
                 _secondsLeft = m.Int("secondsLeft");
                 _submitWindow = m.Int("submitWindow", 15);
-                if (_exam != null) StartExam();
+                _zeroHold = 0;
+                StartExam();
                 break;
             case Msg.Resume:
+                if (_submitted) break;
+                // Bài làm trên máy này là bản mới nhất (có thể vừa làm lúc mất mạng): chỉ lấy từ máy chủ những câu máy này chưa có.
+                bool textAdded = false;
                 var ch = m.As<Dictionary<int, int>>("choices");
                 var es = m.As<Dictionary<int, string>>("essays");
-                if (ch != null) foreach (var (k, v) in ch) _choices[k] = v;
-                if (es != null) foreach (var (k, v) in es) _essays[k] = v;
                 var mu = m.As<Dictionary<int, List<int>>>("multi");
                 var tfr = m.As<Dictionary<int, Dictionary<int, bool>>>("tf");
                 var sh = m.As<Dictionary<int, string>>("shortAns");
-                if (mu != null) foreach (var (k, v) in mu) _multi[k] = v.ToHashSet();
-                if (tfr != null) foreach (var (k, v) in tfr) _tf[k] = v;
-                if (sh != null) foreach (var (k, v) in sh) _short[k] = v;
-                if (_exam != null && (mu?.Count > 0 || tfr?.Count > 0 || sh?.Count > 0)) BuildPaper();
-                RefreshAnswers();
+                if (ch != null) foreach (var (k, v) in ch) _choices.TryAdd(k, v);
+                if (es != null) foreach (var (k, v) in es) if (!_essays.ContainsKey(k) && !string.IsNullOrEmpty(v)) { _essays[k] = v; textAdded = true; }
+                if (mu != null) foreach (var (k, v) in mu) if (!_multi.ContainsKey(k) && v != null) _multi[k] = v.ToHashSet();
+                if (tfr != null) foreach (var (k, v) in tfr) if (!_tf.ContainsKey(k) && v != null) _tf[k] = v;
+                if (sh != null) foreach (var (k, v) in sh) if (!_short.ContainsKey(k) && !string.IsNullOrEmpty(v)) { _short[k] = v; textAdded = true; }
+                if (_exam != null && textAdded) BuildPaper(); else RefreshAnswers();
+                SaveLocal();
                 break;
             case Msg.Time:
                 _secondsLeft = m.Int("secondsLeft");
                 _paused = m.Bool("paused");
+                _zeroHold = 0;
                 UpdateClock();
                 break;
             case Msg.Notice:
@@ -271,7 +344,9 @@ public partial class MainWindow : Window
                 if (_examRunning && !_submitted) DoSubmit(auto: true);
                 break;
             case Msg.Result:
-                ShowResult(m.Bool("showScore"), m.Int("right"), m.Int("wrong"), m.Int("blank"), m["score"]?.GetValue<double>() ?? 0);
+                // Máy chủ đã ghi nhận bài nộp: bản lưu tạm trên máy không còn cần nữa.
+                try { File.Delete(_localSave); } catch { }
+                ShowResult(m.Bool("showScore"), m.Int("right"), m.Int("wrong"), m.Int("blank"), m.Dbl("score"));
                 break;
             case Msg.Release:
                 _released = true;
@@ -297,41 +372,75 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void OnDisconnected()
+    private async void OnDisconnected(Connection closed)
     {
+        if (closed != _conn) return;   // kết nối cũ đã được thay bằng kết nối mới
+        _conn = null;
         if (_released) return;
-        // Mất kết nối trước khi đăng ký xong (thường do nhập sai mã phòng, hoặc kết nối nhầm máy chủ giả):
-        // quay lại màn hình tìm phòng và báo rõ.
+        // Chưa đăng ký xong: quay lại màn hình tìm phòng và báo rõ lý do.
         if (!_registered && !_examRunning)
         {
-            _conn = null;
+            bool wrongPin = _awaitingWelcome;
+            _awaitingWelcome = false;
             InfoPanel.Visibility = Visibility.Collapsed;
-            Anim.Show(FindPanel);
-            FindError.Text = "Không vào được phòng. Kiểm tra lại mã phòng thi (do giám thị đọc) rồi thử lại.";
+            if (FindPanel.Visibility != Visibility.Visible) Anim.Show(FindPanel);
+            ScanText.Text = $"Tìm thấy {_rooms.Count} phòng thi trong mạng LAN";
+            FindError.Text = wrongPin
+                ? "Không vào được phòng. Kiểm tra lại mã phòng thi (do giám thị đọc) rồi thử lại."
+                : "Mất kết nối với máy chủ. Hãy chọn phòng và vào lại.";
             return;
         }
-        if (!_examRunning || _submitted)
+        // Đã vào phòng (đang chờ, đang làm bài hoặc đã nộp): tự kết nối lại cho tới khi giám thị kết thúc phiên.
+        if (_reconnecting) return;
+        _reconnecting = true;
+        SetOffline(true);
+        try
         {
-            if (!_submitted) { FindError.Text = "Mất kết nối với máy chủ."; }
-            return;
-        }
-        OfflineBar.Visibility = Visibility.Visible;
-        while (_room != null && !_released)
-        {
-            await Task.Delay(3000);
-            try
+            while (_room != null && !_released)
             {
-                var c = await Connection.ConnectAsync(_room.Address, _room.Port, _pin);
-                AttachConnection(c);
-                SendHello(c);
-                c.Send(Msg.Register, new { _info.Sbd, _info.FullName, _info.BirthDate, _info.ClassName, token = _sessionToken });
-                foreach (var (k, v) in _choices) c.Send(Msg.Answer, new { no = k, choice = v });
-                foreach (var (k, v) in _essays) c.Send(Msg.Essay, new { no = k, text = v });
-                ResendExtra(c);
-                OfflineBar.Visibility = Visibility.Collapsed;
-                return;
+                await Task.Delay(3000);
+                if (_released) break;
+                try
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+                    var c = await Connection.ConnectAsync(_room.Address, _room.Port, _pin, cts.Token);
+                    if (_released) { c.Close(); break; }
+                    AttachConnection(c);
+                    SendHello(c);
+                    c.Send(Msg.Register, RegisterPayload());
+                    if (_examRunning)
+                    {
+                        foreach (var (k, v) in _choices) c.Send(Msg.Answer, new { no = k, choice = v });
+                        foreach (var (k, v) in _essays) c.Send(Msg.Essay, new { no = k, text = v });
+                        ResendExtra(c);
+                        if (_submitted) c.Send(Msg.Submit, new { auto = true });
+                    }
+                    return;   // trạng thái "mất kết nối" chỉ tắt khi máy chủ xác nhận (tin Registered)
+                }
+                catch { }
             }
-            catch { }
+        }
+        finally { _reconnecting = false; }
+    }
+
+    /// <summary>Hiện/ẩn trạng thái mất kết nối phù hợp với màn hình đang mở.</summary>
+    private void SetOffline(bool offline)
+    {
+        if (offline && !_offline) _offlineSince = DateTime.Now;
+        _offline = offline;
+        if (!offline) _zeroHold = 0;
+        OfflineBar.Visibility = offline && _examRunning && !_submitted ? Visibility.Visible : Visibility.Collapsed;
+        if (!_examRunning)
+        {
+            // Phòng chờ: báo ngay trên khung chờ và cho phép thoát nếu máy chủ không trở lại.
+            WaitText.Text = offline ? "Mất kết nối với máy chủ · đang kết nối lại…" : "Đang chờ giám thị phát đề…";
+            QuitInfoBtn.Visibility = offline ? Visibility.Visible : Visibility.Collapsed;
+        }
+        else if (_submitted && !_released)
+        {
+            WaitSub.Text = offline
+                ? "Mất kết nối với máy chủ · đang kết nối lại… Bài làm của bạn đã được lưu."
+                : "Không tắt máy, không rời khỏi chỗ ngồi. Máy sẽ tự mở khoá khi giám thị đóng phiên.";
         }
     }
 
@@ -345,8 +454,9 @@ public partial class MainWindow : Window
         InfoPanel.Visibility = Visibility.Collapsed;
         FindPanel.Visibility = Visibility.Collapsed;
         TopBar.Visibility = Visibility.Collapsed;
-        BuildPaper();
-        Anim.Show(ExamPanel);
+        // Kết nối lại giữa giờ: giữ nguyên trang đề đang làm (không dựng lại để khỏi mất con trỏ đang gõ).
+        if (firstTime || _builtCode != _exam.Code || PaperHost.Children.Count == 0) BuildPaper(); else RefreshAnswers();
+        if (ExamPanel.Visibility != Visibility.Visible) Anim.Show(ExamPanel);
         ExamTitle.Text = $"{_exam.ExamName} – {_exam.Subject} · Mã đề {_exam.Code}";
         CandidateLine.Text = $"{_info.FullName} · SBD {_info.Sbd} · Lớp {_info.ClassName}";
         SubmitRule.Text = $"Quy định phòng thi: chỉ được nộp bài trong {_submitWindow} phút cuối. Hết giờ bài được nộp tự động.";
@@ -370,9 +480,11 @@ public partial class MainWindow : Window
         UpdateClock();
     }
 
+    private string _builtCode = "";
     private void BuildPaper()
     {
         if (_exam == null) return;
+        _builtCode = _exam.Code;
         PaperHost.Children.Clear(); SheetHost.Children.Clear();
         _cards.Clear(); _optionCircles.Clear(); _bubbles.Clear(); _mathBars.Clear();
 
@@ -631,21 +743,37 @@ public partial class MainWindow : Window
         }
         if (q.AudioBase64 != null)
         {
-            int plays = 0;
-            var path = Path.Combine(Path.GetTempPath(), $"itest_audio_{q.No}.mp3");
-            File.WriteAllBytes(path, Convert.FromBase64String(q.AudioBase64));
-            var player = new MediaPlayer();
-            var btn = new Button { Content = $"▶ Nghe âm thanh (còn {q.AudioMaxPlays} lần)", HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(30, 8, 0, 0) };
-            btn.Click += (_, _) =>
+            try
             {
-                if (plays >= q.AudioMaxPlays) return;
-                plays++;
-                player.Open(new Uri(path));
-                player.Play();
-                btn.Content = plays >= q.AudioMaxPlays ? "Đã hết lượt nghe" : $"▶ Nghe lại (còn {q.AudioMaxPlays - plays} lần)";
-                btn.IsEnabled = plays < q.AudioMaxPlays;
-            };
-            card.Children.Add(btn);
+                // Mỗi file âm thanh chỉ ghi ra đĩa một lần (thư mục tạm riêng của phiên, xoá khi thoát);
+                // số lượt đã nghe được giữ lại khi đề được dựng lại sau lúc rớt mạng.
+                int no = q.No;
+                if (!_audioFiles.TryGetValue(no, out var path))
+                {
+                    Directory.CreateDirectory(_mediaDir);
+                    path = Path.Combine(_mediaDir, $"cau{no}{q.AudioExt}");
+                    File.WriteAllBytes(path, Convert.FromBase64String(q.AudioBase64));
+                    _audioFiles[no] = path;
+                }
+                int max = Math.Max(1, q.AudioMaxPlays);
+                int Left() => max - _audioPlays.GetValueOrDefault(no);
+                var btn = new Button { HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(30, 8, 0, 0) };
+                void Paint()
+                {
+                    btn.Content = Left() <= 0 ? "Đã hết lượt nghe" : _audioPlays.ContainsKey(no) ? $"▶ Nghe lại (còn {Left()} lần)" : $"▶ Nghe âm thanh (còn {Left()} lần)";
+                    btn.IsEnabled = Left() > 0;
+                }
+                btn.Click += (_, _) =>
+                {
+                    if (Left() <= 0) return;
+                    _audioPlays[no] = _audioPlays.GetValueOrDefault(no) + 1;
+                    try { _player.Open(new Uri(path)); _player.Play(); } catch { }
+                    Paint();
+                };
+                Paint();
+                card.Children.Add(btn);
+            }
+            catch (Exception ex) { CrashGuard.Write(ex); }
         }
     }
 
@@ -844,7 +972,10 @@ public partial class MainWindow : Window
         if (!_examRunning || _submitted) return;
         if (!_paused && _secondsLeft > 0) _secondsLeft--;
         UpdateClock();
-        if (_secondsLeft == 0) DoSubmit(auto: true);
+        if (_secondsLeft > 0) return;
+        // Hết giờ lúc đang mất kết nối: máy chủ có bù giờ cho thời gian rớt mạng, nên chờ kết nối lại tối đa 2 phút rồi mới tự nộp.
+        if (_offline && ++_zeroHold < 120) return;
+        DoSubmit(auto: true);
     }
 
     private void UpdateClock()
@@ -867,9 +998,13 @@ public partial class MainWindow : Window
     private void DoSubmit(bool auto)
     {
         if (_submitted) return;
+        // Ghi bản lưu tạm lần cuối trước khi khoá bài; chỉ xoá khi máy chủ xác nhận đã nhận bài (tin Result).
+        _saveDebounce.Stop();
+        SaveLocalNow();
         _submitted = true;
         FlushEssays();
         _conn?.Send(Msg.Submit, new { auto });
+        OfflineBar.Visibility = Visibility.Collapsed;
         _submittedAt = DateTime.Now;
         SettingsPopup.IsOpen = false;
         ExamPanel.Visibility = Visibility.Collapsed;
@@ -881,7 +1016,7 @@ public partial class MainWindow : Window
         var pop = new DoubleAnimation(0, 1, TimeSpan.FromSeconds(0.5)) { EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.6 } };
         st.BeginAnimation(ScaleTransform.ScaleXProperty, pop);
         st.BeginAnimation(ScaleTransform.ScaleYProperty, pop);
-        try { File.Delete(_localSave); } catch { }
+        if (_offline) SetOffline(true);
     }
 
     private void ShowResult(bool showScore, int right, int wrong, int blank, double score)
@@ -918,8 +1053,9 @@ public partial class MainWindow : Window
 
     private void Ime_Changed(object sender, RoutedEventArgs e)
     {
+        VietInput.Enabled = ImeOff?.IsChecked != true;
         VietInput.Mode = ImeVni?.IsChecked == true ? ImeMode.Vni : ImeMode.Telex;
-        if (ImeHint != null) ImeHint.Text = ImeHintFor(VietInput.Mode);
+        if (ImeHint != null) ImeHint.Text = VietInput.Enabled ? ImeHintFor(VietInput.Mode) : "Bộ gõ của iTest đang tắt (dùng khi làm bài tiếng Anh hoặc máy đã bật Unikey).";
     }
 
     private static string ImeHintFor(ImeMode m) => m == ImeMode.Telex
@@ -985,8 +1121,11 @@ public partial class MainWindow : Window
             return;
         }
         KioskGuard.Leave();
+        _released = true;
         _listener.Dispose();
         _conn?.Close();
+        try { _player.Close(); } catch { }
+        try { if (Directory.Exists(_mediaDir)) Directory.Delete(_mediaDir, true); } catch { }
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
@@ -994,7 +1133,9 @@ public partial class MainWindow : Window
     /// <summary>Thoát khi chưa vào phòng chờ (sau khi đăng ký chỉ máy chủ mới cho thoát).</summary>
     private void Quit_Click(object sender, RoutedEventArgs e)
     {
-        if (_examRunning || _registered && !_released) return;
+        if (_examRunning) return;
+        if (_registered && !_released && !_offline) return;   // đang ở phòng chờ và còn kết nối: chỉ giám thị cho thoát
+        _released = true;
         _conn?.Close();
         Close();
     }
@@ -1011,7 +1152,7 @@ public partial class MainWindow : Window
         string json;
         try
         {
-            json = JsonSerializer.Serialize(new { sbd = _info.Sbd, code = _exam?.Code,
+            json = JsonSerializer.Serialize(new { sbd = _info.Sbd, code = _exam?.Code, exam = ExamKey(),
                 choices = new Dictionary<int, int>(_choices), essays = new Dictionary<int, string>(_essays),
                 multi = _multi.ToDictionary(kv => kv.Key, kv => kv.Value.ToList()),
                 tf = _tf.ToDictionary(kv => kv.Key, kv => new Dictionary<int, bool>(kv.Value)),
@@ -1026,13 +1167,17 @@ public partial class MainWindow : Window
         });
     }
 
+    /// <summary>Dấu nhận diện bài thi, để bản lưu tạm của bài thi khác (cùng SBD, cùng mã đề) không bị nạp nhầm.</summary>
+    private string ExamKey() => _exam == null ? "" : $"{_exam.ExamName}|{_exam.Subject}|{_exam.SchoolYear}|{_exam.Questions.Count}|{DateTime.Today:yyyyMMdd}";
+
     private void LoadLocalSave()
     {
         try
         {
             if (!File.Exists(_localSave)) return;
             var node = JsonNode.Parse(File.ReadAllText(_localSave)) as JsonObject;
-            if (node == null || node.Str("sbd") != _info.Sbd || node.Str("code") != _exam?.Code) return;
+            // Chỉ dùng lại bản lưu tạm của đúng thí sinh, đúng mã đề và đúng bài thi này (cùng ngày).
+            if (node == null || node.Str("sbd") != _info.Sbd || node.Str("code") != _exam?.Code || node.Str("exam") != ExamKey()) return;
             var ch = node.As<Dictionary<int, int>>("choices");
             var es = node.As<Dictionary<int, string>>("essays");
             if (ch != null) foreach (var (k, v) in ch) if (!_choices.ContainsKey(k)) { _choices[k] = v; _conn?.Send(Msg.Answer, new { no = k, choice = v }); }
@@ -1053,8 +1198,9 @@ public partial class MainWindow : Window
 public sealed class RoomItem
 {
     public RoomBeacon Beacon { get; private set; }
+    public DateTime LastSeen { get; private set; } = DateTime.Now;
     public RoomItem(RoomBeacon b) => Beacon = b;
-    public void Update(RoomBeacon b) => Beacon = b;
+    public void Update(RoomBeacon b) { Beacon = b; LastSeen = DateTime.Now; }
     public string Title => $"{Beacon.Room} · {Beacon.Exam}";
     public string Meta => $"{Beacon.Host} · {Beacon.Address} · Giám thị: {Beacon.Proctor} · {Beacon.Candidates} máy";
     public string BadgeText => Beacon.Open ? "Đang mở" : "Chưa mở";

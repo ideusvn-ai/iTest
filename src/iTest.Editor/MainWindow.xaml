@@ -10,6 +10,12 @@
             <DockPanel>
                 <Button x:Name="QuitBtn" DockPanel.Dock="Right" Content="Thoát" Margin="8,0,0,0" VerticalAlignment="Center" Click="Quit_Click"
                         ToolTip="Thoát iTest-Editor. Nếu bộ đề chưa đóng gói, phiên làm việc được lưu để mở lại lần sau."/>
+                <ComboBox x:Name="ImeBox" DockPanel.Dock="Right" Width="132" Margin="8,0,0,0" VerticalAlignment="Center" SelectionChanged="Ime_Changed"
+                          ToolTip="Bộ gõ tiếng Việt có sẵn của iTest. Chọn “Tắt bộ gõ” khi soạn đề tiếng Anh hoặc khi máy đã bật Unikey.">
+                    <ComboBoxItem Content="Gõ TELEX" Tag="telex"/>
+                    <ComboBoxItem Content="Gõ VNI" Tag="vni"/>
+                    <ComboBoxItem Content="Tắt bộ gõ" Tag="off"/>
+                </ComboBox>
                 <WrapPanel x:Name="EditButtons" DockPanel.Dock="Right" Visibility="Collapsed" VerticalAlignment="Center">
                     <Button Content="+ Tạo bộ đề mới" Margin="0,0,8,0" Click="NewSet_Click"/>
                     <Button Content="Nhập từ Word" Margin="0,0,8,0" Click="ImportWord_Click"/>

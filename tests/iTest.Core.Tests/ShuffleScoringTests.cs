@@ -157,6 +157,17 @@ public class ShuffleScoringTests
     }
 
     [Fact]
+    public void Client_exam_carries_audio_extension()
+    {
+        var x = new ExamSet { Codes = 1 };
+        x.Questions.Add(new Question { Id = 1, Type = QuestionType.Essay, Text = "Nghe và trả lời", Points = 1, Audio = "abc.WAV", Options = new() });
+        var l = Shuffler.Build(x)[0];
+        var ce = Shuffler.ToClient(x, l, new Dictionary<string, byte[]> { ["abc.WAV"] = new byte[] { 1, 2, 3 } }, "", "");
+        Assert.Equal(".wav", ce.Questions[0].AudioExt);
+        Assert.NotNull(ce.Questions[0].AudioBase64);
+    }
+
+    [Fact]
     public void Yes_no_missing_answer_is_reported()
     {
         var q = new Question { Type = QuestionType.YesNo, Text = "x", Points = 1, Options = QuestionTypes.YesNoOptions.ToList() };

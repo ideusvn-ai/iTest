@@ -77,6 +77,37 @@ public class ConnectionTests
     }
 
     [Fact]
+    public void Malformed_fields_do_not_throw()
+    {
+        var o = (JsonObject)JsonNode.Parse("{\"t\":123,\"no\":\"abc\",\"sbd\":null,\"score\":\"x\",\"exam\":\"not-an-object\",\"multi\":{\"a\":1}}")!;
+        Assert.Equal("", o.Str("t"));
+        Assert.Equal("", o.Str("sbd"));
+        Assert.Equal("", o.Str("missing"));
+        Assert.Equal(0, o.Int("no"));
+        Assert.Equal(-1, o.Int("no", -1));
+        Assert.Equal(0, o.Dbl("score"));
+        Assert.Null(o.As<ClientExam>("exam"));
+        Assert.Null(o.As<Dictionary<int, List<int>>>("multi"));
+    }
+
+    [Fact]
+    public async Task Silent_peer_is_dropped_after_handshake_timeout()
+    {
+        var l = new TcpListener(IPAddress.Loopback, 0);
+        l.Start();
+        var port = ((IPEndPoint)l.LocalEndpoint).Port;
+        var accept = l.AcceptTcpClientAsync();
+        using var raw = new TcpClient();
+        await raw.ConnectAsync(IPAddress.Loopback, port);   // kết nối rồi im lặng, không bắt tay
+        var server = new Connection(await accept, isServer: true);
+        var closed = new TaskCompletionSource();
+        server.Closed += _ => closed.TrySetResult();
+        server.Start();
+        await closed.Task.WaitAsync(TimeSpan.FromSeconds(20));
+        l.Stop();
+    }
+
+    [Fact]
     public async Task Matching_room_pin_communicates()
     {
         var l = new TcpListener(IPAddress.Loopback, 0);

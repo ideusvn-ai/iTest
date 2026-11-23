@@ -105,7 +105,16 @@ public sealed class RoomService : IDisposable
         Media = content.Media;
         PackagePath = path;
         Layouts = Shuffler.Build(Exam);
+        _clientExams.Clear();
         if (Phase == Phase.Open) SecondsLeft = Exam.Minutes * 60;
+    }
+
+    // Đề theo từng mã chỉ dựng một lần (kèm ảnh/âm thanh) rồi dùng chung cho mọi máy cùng mã.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<ClientExam>> _clientExams = new();
+    private ClientExam ClientExamFor(CodeLayout layout)
+    {
+        var exam = Exam; var media = Media; var dept = Department; var school = School;
+        return _clientExams.GetOrAdd(layout.Code, _ => new Lazy<ClientExam>(() => Shuffler.ToClient(exam, layout, media, dept, school))).Value;
     }
 
     // ---------------- Mở / đóng phòng ----------------
@@ -126,6 +135,7 @@ public sealed class RoomService : IDisposable
             Open = Phase != Phase.Collected, Candidates = Candidates.Count
         });
         _beacon.Start();
+        _lastWall = _wall.Elapsed.TotalSeconds; _carry = 0;
         _tick.Start();
         if (existingBackupDir == null) Log("THÔNG TIN", "", $"Mở {Room} · {Exam.ExamName} – {Exam.Subject} · {Path.GetFileName(PackagePath)} · {Exam.Minutes} phút");
     }
@@ -165,25 +175,43 @@ public sealed class RoomService : IDisposable
             var conn = new Connection(tcp, isServer: true, RoomPin);
             conn.Received += (c, m) => _ui.BeginInvoke(() => OnMessage(c, m));
             conn.Closed += c => _ui.BeginInvoke(() => OnClosed(c));
-            _ui.Invoke(() => _pending.Add(conn));
+            _ui.Invoke(() =>
+            {
+                // Giới hạn số kết nối chưa đăng ký để một máy không thể mở hàng loạt kết nối làm nghẽn máy chủ.
+                while (_pending.Count >= MaxPending) { var old = _pending[0]; _pending.RemoveAt(0); old.Close(); }
+                _pending.Add(conn);
+            });
             conn.Start();
             conn.Send(Msg.Welcome, new { room = Room, proctor = Proctor, exam = $"{Exam.ExamName} – {Exam.Subject}", department = Department, school = School });
         }
     }
 
+    private const int MaxPending = 300;
     private Candidate? ByConn(Connection c) => Candidates.FirstOrDefault(x => x.Conn == c);
 
+    /// <summary>Số câu hợp lệ của thí sinh (chặn máy gửi số câu bừa làm phình bộ nhớ).</summary>
+    private bool ValidNo(int no) => no >= 1 && no <= Math.Max(1, Exam.Questions.Count);
+    private const int MaxEssayChars = 200_000, MaxShortChars = 500;
+    private static string Clip(string s, int max) => s.Length <= max ? s : s[..max];
+
     // ---------------- Thông điệp từ máy thí sinh ----------------
+    /// <summary>Mọi tin từ mạng đi qua đây; dữ liệu sai định dạng từ một máy không được phép làm sập máy chủ.</summary>
     private void OnMessage(Connection conn, JsonObject m)
+    {
+        try { Handle(conn, m); }
+        catch (Exception ex)
+        {
+            ITest.UI.CrashGuard.Write(ex);
+            try { conn.Close(); } catch { }
+        }
+    }
+
+    private void Handle(Connection conn, JsonObject m)
     {
         var cand = ByConn(conn);
         if (cand != null) cand.LastSeen = DateTime.Now;
         switch (m.Str("t"))
         {
-            case Msg.DupServer:
-                Log("CẢNH BÁO", m.Str("machine"), $"Máy {m.Str("machine")} ({m.Str("ip")}) vừa mở iTest-Server trong cùng mạng khi phòng thi đang mở — máy đó đã bị chặn, không mở được phòng thi khác");
-                conn.Close();
-                return;
             case Msg.Ping:
                 conn.Send(Msg.Pong);
                 return;
@@ -196,19 +224,19 @@ public sealed class RoomService : IDisposable
                 OnRegister(conn, m.As<CandidateInfo>() ?? new CandidateInfo());
                 break;
             case Msg.Answer:
-                if (cand == null || !cand.IsActive) break;
-                cand.Sheet.Choices[m.Int("no")] = m.Int("choice");
+                if (cand == null || !cand.IsActive || !ValidNo(m.Int("no"))) break;
+                cand.Sheet.Choices[m.Int("no")] = m.Int("choice", -1);
                 cand.NotifyProgress();
                 return;
             case Msg.AnswerEx:
                 if (cand == null || !cand.IsActive) return;
                 var ax = m.As<AnswerEx>();
-                if (ax == null) return;
+                if (ax == null || !ValidNo(ax.No)) return;
                 switch (ax.Type)
                 {
-                    case QuestionType.MultiSelect: cand.Sheet.Multi[ax.No] = ax.Choices; break;
-                    case QuestionType.TrueFalse: cand.Sheet.Tf[ax.No] = ax.Tf; break;
-                    case QuestionType.ShortAnswer: cand.Sheet.Short[ax.No] = ax.Text; break;
+                    case QuestionType.MultiSelect: cand.Sheet.Multi[ax.No] = (ax.Choices ?? new()).Distinct().Take(16).ToList(); break;
+                    case QuestionType.TrueFalse: cand.Sheet.Tf[ax.No] = (ax.Tf ?? new()).Where(kv => kv.Key is >= 0 and < 16).ToDictionary(kv => kv.Key, kv => kv.Value); break;
+                    case QuestionType.ShortAnswer: cand.Sheet.Short[ax.No] = Clip(ax.Text ?? "", MaxShortChars); break;
                 }
                 cand.NotifyProgress();
                 return;
@@ -216,11 +244,11 @@ public sealed class RoomService : IDisposable
                 if (cand == null) return;
                 cand.CheatCount++;
                 cand.RefreshAll();
-                Log("GIAN LẬN", cand.Machine, $"{m.Str("detail")} · {cand.FullName}");
+                Log("GIAN LẬN", cand.Machine, $"{Clip(m.Str("detail"), 300)} · {cand.FullName}");
                 break;
             case Msg.Essay:
-                if (cand == null || !cand.IsActive) break;
-                cand.Sheet.Essays[m.Int("no")] = m.Str("text");
+                if (cand == null || !cand.IsActive || !ValidNo(m.Int("no"))) break;
+                cand.Sheet.Essays[m.Int("no")] = Clip(m.Str("text"), MaxEssayChars);
                 cand.NotifyProgress();
                 return;
             case Msg.Submit:
@@ -229,7 +257,7 @@ public sealed class RoomService : IDisposable
                 break;
             case Msg.Focus:
                 if (cand != null && cand.IsActive)
-                    Log("CẢNH BÁO", cand.Machine, $"{m.Str("reason")} · {cand.FullName}");
+                    Log("CẢNH BÁO", cand.Machine, $"{Clip(m.Str("reason"), 200)} · {cand.FullName}");
                 break;
         }
         Changed?.Invoke();
@@ -240,8 +268,16 @@ public sealed class RoomService : IDisposable
 
     private void OnRegister(Connection conn, CandidateInfo info)
     {
-        info.Sbd = info.Sbd.Trim();
-        var machine = _helloMachine.TryGetValue(conn, out var mm) ? mm : conn.RemoteAddress;
+        info.Sbd = Clip((info.Sbd ?? "").Trim(), 30);
+        info.FullName = Clip((info.FullName ?? "").Trim(), 100);
+        info.BirthDate = Clip((info.BirthDate ?? "").Trim(), 20);
+        info.ClassName = Clip((info.ClassName ?? "").Trim(), 30);
+        if (info.Sbd.Length == 0 || info.FullName.Length == 0)
+        {
+            conn.Send(Msg.Reject, new { reason = "Thiếu số báo danh hoặc họ tên." });
+            return;
+        }
+        var machine = _helloMachine.TryGetValue(conn, out var mm) && mm.Length > 0 ? Clip(mm, 60) : conn.RemoteAddress;
         var clientToken = _helloToken.TryGetValue(conn, out var tk) ? tk : "";
         var existing = Candidates.FirstOrDefault(c => string.Equals(c.Sbd, info.Sbd, StringComparison.OrdinalIgnoreCase)) ?? ByConn(conn);
         // Chỉ cho giành lại phiên khi: đúng token phiên (chính máy thí sinh đó, rớt mạng rồi vào lại),
@@ -300,8 +336,7 @@ public sealed class RoomService : IDisposable
         if (Phase == Phase.Running && cand.Status == CandStatus.Doing)
         {
             // Máy đang thi kết nối lại: gửi lại đề và bài làm đã lưu.
-            SendExam(cand);
-            conn.Send(Msg.Resume, new { choices = cand.Sheet.Choices, essays = cand.Sheet.Essays, multi = cand.Sheet.Multi, tf = cand.Sheet.Tf, shortAns = cand.Sheet.Short });
+            SendExam(cand, resume: true);
         }
         else if (Phase == Phase.Running && cand.Status == CandStatus.Waiting)
         {
@@ -341,11 +376,33 @@ public sealed class RoomService : IDisposable
         c.TotalQuestions = Exam.Questions.Count;
     }
 
-    private void SendExam(Candidate c)
+    /// <summary>
+    /// Gửi đề (và bài làm đã lưu nếu <paramref name="resume"/>) cho một máy. Việc dựng và mã hoá đề (có thể nặng vì ảnh, âm thanh)
+    /// chạy ở luồng nền để bảng điều khiển không bị đứng khi phát đề cho cả phòng; hai tin luôn đi đúng thứ tự Đề → Bài làm.
+    /// </summary>
+    private void SendExam(Candidate c, bool resume = false)
     {
-        var layout = Layouts.First(l => l.Code == c.Sheet.Code);
-        var ce = Shuffler.ToClient(Exam, layout, Media, Department, School);
-        c.Conn?.Send(Msg.Exam, new { exam = ce, secondsLeft = LeftOf(c), submitWindow = SubmitWindowMinutes });
+        var conn = c.Conn;
+        var layout = Layouts.FirstOrDefault(l => l.Code == c.Sheet.Code);
+        if (conn == null || layout == null) return;
+        int left = LeftOf(c), window = SubmitWindowMinutes;
+        object? saved = !resume ? null : new
+        {
+            choices = new Dictionary<int, int>(c.Sheet.Choices),
+            essays = new Dictionary<int, string>(c.Sheet.Essays),
+            multi = c.Sheet.Multi.ToDictionary(kv => kv.Key, kv => kv.Value.ToList()),
+            tf = c.Sheet.Tf.ToDictionary(kv => kv.Key, kv => new Dictionary<int, bool>(kv.Value)),
+            shortAns = new Dictionary<int, string>(c.Sheet.Short)
+        };
+        Task.Run(() =>
+        {
+            try
+            {
+                conn.Send(Msg.Exam, new { exam = ClientExamFor(layout), secondsLeft = left, submitWindow = window });
+                if (saved != null) conn.Send(Msg.Resume, saved);
+            }
+            catch (Exception ex) { ITest.UI.CrashGuard.Write(ex); }
+        });
     }
 
     /// <summary>Có máy nào đang chờ phát đề riêng không (vào phòng sau khi đã phát đề).</summary>
@@ -357,8 +414,7 @@ public sealed class RoomService : IDisposable
         if (!CanHandOut(c)) return;
         AssignCode(c);
         c.Status = CandStatus.Doing;
-        SendExam(c);
-        c.Conn?.Send(Msg.Resume, new { choices = c.Sheet.Choices, essays = c.Sheet.Essays, multi = c.Sheet.Multi, tf = c.Sheet.Tf, shortAns = c.Sheet.Short });
+        SendExam(c, resume: true);
         Log("PHÁT ĐỀ", c.Machine, $"phát đề riêng · mã {c.Sheet.Code} · {c.FullName}");
         SaveState();
         Changed?.Invoke();
@@ -383,7 +439,25 @@ public sealed class RoomService : IDisposable
 
     public int LeftOf(Candidate c) => Phase == Phase.Open ? Exam.Minutes * 60 : Math.Max(0, SecondsLeft + c.ExtraSeconds);
 
+    // Đồng hồ phòng thi chạy theo giờ thực của máy (Stopwatch), không theo số lần timer giao diện kêu:
+    // khi giao diện bận, timer kêu trễ nhưng giờ thi vẫn đúng.
+    private readonly System.Diagnostics.Stopwatch _wall = System.Diagnostics.Stopwatch.StartNew();
+    private double _lastWall, _carry;
+
     private void OnTick()
+    {
+        double now = _wall.Elapsed.TotalSeconds;
+        _carry += now - _lastWall;
+        _lastWall = now;
+        int steps = (int)_carry;
+        _carry -= steps;
+        if (steps > 5) steps = 5;   // máy chủ ngủ/treo lâu: không trừ dồn giờ của thí sinh
+        for (int i = 0; i < steps; i++) Second();
+        if (steps > 0) Changed?.Invoke();
+    }
+
+    /// <summary>Công việc của mỗi giây thi.</summary>
+    private void Second()
     {
         TickCount++;
         if (Phase == Phase.Running && !Paused)
@@ -415,7 +489,6 @@ public sealed class RoomService : IDisposable
             if (TickCount % 30 == 0) Backup();
             else if (TickCount % 5 == 0) SaveState();
         }
-        Changed?.Invoke();
     }
 
     public void TogglePause()
@@ -681,11 +754,16 @@ public sealed class RoomService : IDisposable
     /// </summary>
     public void Restore(RoomState st)
     {
+        // Bộ đề dùng để khôi phục phải đúng là bộ đề của phòng thi đó: mã đề và số câu của bài làm đã lưu phải khớp.
+        var codes = Layouts.Select(l => l.Code).ToHashSet();
+        if (st.Candidates.Any(c => c.Sheet.Code.Length > 0 && (!codes.Contains(c.Sheet.Code) || c.TotalQuestions != Exam.Questions.Count)))
+            throw new InvalidDataException("Bộ đề vừa chọn không khớp với phòng thi cần khôi phục (khác số câu hoặc số mã đề). Hãy chọn đúng file bộ đề đã dùng.");
         Department = st.Department; School = st.School; Room = st.Room; Proctor = st.Proctor; RoomPin = st.RoomPin;
         SubmitWindowMinutes = st.SubmitWindowMinutes; ShowScore = st.ShowScore;
+        _clientExams.Clear();
         foreach (var cs in st.Candidates.OrderBy(c => c.Index))
         {
-            if (st.Phase == Phase.Open && cs.Status is CandStatus.Waiting or CandStatus.Connected) continue;
+            // Máy còn ở phòng chờ chưa có bài làm: không cần khôi phục, máy sẽ tự vào lại.
             if (cs.Status is CandStatus.Waiting or CandStatus.Connected) continue;
             var c = new Candidate
             {

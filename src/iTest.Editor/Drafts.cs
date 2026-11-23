@@ -20,6 +20,7 @@ public sealed class Draft
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
     private readonly object _writeLock = new();
+    private bool _deleted;
 
     /// <summary>
     /// Lưu bản nháp. Mặc định dựng JSON ngay (ảnh chụp nội dung) rồi ghi đĩa ở luồng nền để không giật khi gõ;
@@ -36,6 +37,7 @@ public sealed class Draft
         {
             lock (_writeLock)
             {
+                if (_deleted) return;   // bản nháp đã bị xoá trong lúc chờ ghi: không tạo lại thư mục
                 Directory.CreateDirectory(folder);
                 File.WriteAllText(Path.Combine(folder, "draft.json"), json);
             }
@@ -63,7 +65,14 @@ public sealed class Draft
         return list.OrderByDescending(d => d.SavedAt).ToList();
     }
 
-    public void Delete() { try { Directory.Delete(Folder, true); } catch { } }
+    public void Delete()
+    {
+        lock (_writeLock)
+        {
+            _deleted = true;
+            try { if (Directory.Exists(Folder)) Directory.Delete(Folder, true); } catch { }
+        }
+    }
 
     public Dictionary<string, byte[]> LoadMedia()
     {

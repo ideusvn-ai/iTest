@@ -53,6 +53,7 @@ public partial class MainWindow : Window
         {
             _peers = new BeaconListener();
             _peers.Found += b => Dispatcher.BeginInvoke(() => OnPeer(b));
+            _peers.DuplicateReported += b => Dispatcher.BeginInvoke(() => OnDuplicateReported(b));
             _peers.Start();
         }
         catch { /* không nghe được UDP: bỏ qua kiểm tra */ }
@@ -79,6 +80,15 @@ public partial class MainWindow : Window
         Block(b);
     }
 
+    /// <summary>Máy khác báo: nó vừa mở iTest-Server trong khi phòng thi của máy này đang mở.</summary>
+    private void OnDuplicateReported(RoomBeacon b)
+    {
+        if (_room == null || b.ServerId != _room.ServerId) return;
+        if (!_dupLogged.Add(b.Host + "|" + b.Address)) return;
+        _room.Log("CẢNH BÁO", b.Host, $"Máy {b.Host} ({b.Address}) vừa mở iTest-Server trong cùng mạng khi phòng thi này đang mở");
+    }
+    private readonly HashSet<string> _dupLogged = new();
+
     /// <summary>Chặn máy này và báo cho máy chủ đang mở phòng biết.</summary>
     private void Block(RoomBeacon b)
     {
@@ -89,22 +99,11 @@ public partial class MainWindow : Window
         SetupPanel.Visibility = Visibility.Collapsed;
         ScanPanel.Visibility = Visibility.Collapsed;
         if (BlockPanel.Visibility != Visibility.Visible) Anim.Show(BlockPanel);
-        if (_peerNotified.Add(b.ServerId)) _ = NotifyPeer(b);
-    }
-
-    private static async Task NotifyPeer(RoomBeacon b)
-    {
-        try
+        if (_peerNotified.Add(b.ServerId))
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var c = await Connection.ConnectAsync(b.Address, b.Port, ct: cts.Token);
-            c.Start();
-            await c.SendAsync(Msg.DupServer, new { machine = Environment.MachineName, ip = NetUtil.LocalIPv4(), user = Environment.UserName })
-                   .WaitAsync(TimeSpan.FromSeconds(5));
-            await Task.Delay(500);
-            c.Dispose();
+            var addr = b.Address; var id = b.ServerId;
+            Task.Run(() => NetUtil.SendDuplicateNotice(addr, id));
         }
-        catch { }
     }
 
     private bool _ignorePeer;
@@ -184,7 +183,8 @@ public partial class MainWindow : Window
         _room = new RoomService(Dispatcher);
         _room.LoadPackage(pkg, st.PackagePath);
         try { _room.Restore(st); }
-        catch (Exception ex) { MessageBox.Show(this, "Không mở được cổng mạng: " + ex.Message, "Khôi phục"); _room.Dispose(); _room = null; return; }
+        catch (InvalidDataException ex) { MessageBox.Show(this, ex.Message, "Khôi phục", MessageBoxButton.OK, MessageBoxImage.Warning); _room.Dispose(); _room = null; return; }
+        catch (Exception ex) { MessageBox.Show(this, "Không mở được cổng mạng (có thể iTest-Server khác đang chạy): " + ex.Message, "Khôi phục"); _room.Dispose(); _room = null; return; }
         _pkg = pkg; _pkgPath = st.PackagePath;
         _recover = null;
         RecoverBox.Visibility = Visibility.Collapsed;
@@ -382,8 +382,10 @@ public partial class MainWindow : Window
         UpdateFilterCounts();
         UpdateSelection();
 
-        BackupLine.Text = r.Phase == Phase.Collected ? "Đã sao lưu bài làm" : $"Sao lưu tự động sau {30 - r.TickCount % 30} giây · {r.BackupDir}";
-        BackupBar.Value = r.TickCount % 30;
+        BackupLine.Text = r.Phase == Phase.Collected ? "Đã sao lưu bài làm"
+            : r.Phase == Phase.Open ? "Sao lưu tự động sẽ bắt đầu sau khi phát đề"
+            : $"Sao lưu tự động sau {30 - r.TickCount % 30} giây · {r.BackupDir}";
+        BackupBar.Value = r.Phase == Phase.Running ? r.TickCount % 30 : 0;
         ExportBtn.IsEnabled = r.Phase == Phase.Collected;
         SchoolExportBtn.IsEnabled = r.Phase == Phase.Collected;
         ExportBtn.Content = r.Exported ? "✓ Đã xuất · Xuất lại" : "⬇  Xuất kết quả";
