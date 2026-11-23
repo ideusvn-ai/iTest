@@ -321,6 +321,7 @@ public partial class MainWindow : Window
         RebuildRows();
         QList.SelectedIndex = _rows.Count > 0 ? 0 : -1;
         RefreshSide();
+        UpdateListButtons();
     }
 
     private void RebuildRows()
@@ -562,7 +563,79 @@ public partial class MainWindow : Window
         EPreview.Content = sp;
     }
 
-    private void QList_SelectionChanged(object sender, SelectionChangedEventArgs e) => LoadCurrent();
+    private void QList_SelectionChanged(object sender, SelectionChangedEventArgs e) { LoadCurrent(); UpdateListButtons(); }
+
+    // ===================== Thêm / xoá / đổi thứ tự câu =====================
+    private void UpdateListButtons()
+    {
+        var x = _draft?.Exam; var q = Cur;
+        if (x == null) return;
+        int i = q == null ? -1 : x.Questions.IndexOf(q);
+        QDelBtn.IsEnabled = q != null && x.Questions.Count > 1;
+        QUpBtn.IsEnabled = i > 0 && x.Questions[i - 1].Type.IsObjective() == q!.Type.IsObjective();
+        QDownBtn.IsEnabled = i >= 0 && i < x.Questions.Count - 1 && x.Questions[i + 1].Type.IsObjective() == q!.Type.IsObjective();
+        QAddEssayBtn.Content = x.McQuestions.Any() ? "＋ Thêm câu tự luận" : "＋ Thêm câu trắc nghiệm";
+    }
+
+    /// <summary>Sau khi cấu trúc bộ đề đổi: dựng lại danh sách, chọn câu cần tới và lưu.</summary>
+    private void AfterStructureChange(Question? select)
+    {
+        RebuildRows();
+        var row = _rows.FirstOrDefault(r => r.Q == select) ?? _rows.FirstOrDefault();
+        QList.SelectedItem = row;
+        if (row != null) QList.ScrollIntoView(row);
+        _packed = false;
+        RefreshSide();
+        UpdateListButtons();
+        SaveText.Text = "Đang lưu bản nháp…";
+        _saveTimer.Stop(); _saveTimer.Start();
+    }
+
+    private void AddQuestion_Click(object sender, RoutedEventArgs e)
+    {
+        if (_draft == null) return;
+        var q = _draft.Exam.InsertAfter(Cur, objective: Cur?.Type.IsObjective() ?? true);
+        AfterStructureChange(q);
+        Dispatcher.BeginInvoke(() => EText.Focus(), DispatcherPriority.Input);
+    }
+
+    /// <summary>Thêm câu vào phần còn lại (tự luận, hoặc trắc nghiệm nếu bộ đề chưa có câu trắc nghiệm).</summary>
+    private void AddEssay_Click(object sender, RoutedEventArgs e)
+    {
+        if (_draft == null) return;
+        var x = _draft.Exam;
+        bool objective = !x.McQuestions.Any();
+        bool newPart = objective ? !x.McQuestions.Any() : !x.EssayQuestions.Any();
+        var q = x.InsertAfter(null, objective);
+        AfterStructureChange(q);
+        if (newPart)
+            MessageBox.Show(this, "Đã thêm phần mới vào bộ đề. Phần này chưa có điểm: bấm “Sửa” ở khung Thông tin bộ đề để nhập tổng điểm cho từng phần (tổng cả đề phải bằng 10).",
+                "iTest-Editor", MessageBoxButton.OK, MessageBoxImage.Information);
+        Dispatcher.BeginInvoke(() => EText.Focus(), DispatcherPriority.Input);
+    }
+
+    private void DeleteQuestion_Click(object sender, RoutedEventArgs e)
+    {
+        if (_draft == null || Cur == null) return;
+        var x = _draft.Exam; var q = Cur;
+        if (x.Questions.Count <= 1) return;
+        int i = x.Questions.IndexOf(q);
+        bool hasContent = !string.IsNullOrWhiteSpace(q.Text) || q.Image != null || q.Audio != null || q.Options.Any(o => !string.IsNullOrWhiteSpace(o) && !QuestionTypes.YesNoOptions.Contains(o));
+        if (hasContent && MessageBox.Show(this, $"Xoá câu {i + 1}? Nội dung câu này sẽ mất và điểm của phần được chia đều lại cho các câu còn lại.",
+                "Xoá câu hỏi", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        if (!x.Remove(q)) return;
+        AfterStructureChange(x.Questions[Math.Min(i, x.Questions.Count - 1)]);
+    }
+
+    private void MoveUp_Click(object sender, RoutedEventArgs e) => MoveCurrent(-1);
+    private void MoveDown_Click(object sender, RoutedEventArgs e) => MoveCurrent(+1);
+
+    private void MoveCurrent(int delta)
+    {
+        if (_draft == null || Cur == null) return;
+        var q = Cur;
+        if (_draft.Exam.Move(q, delta)) AfterStructureChange(q);
+    }
 
     private void LoadCurrent()
     {

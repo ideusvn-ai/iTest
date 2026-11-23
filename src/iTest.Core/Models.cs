@@ -167,6 +167,51 @@ public sealed class ExamSet
         Distribute(QuestionType.Essay);
     }
 
+    private void Renumber()
+    {
+        for (int i = 0; i < Questions.Count; i++) Questions[i].Id = i + 1;
+        McCount = McQuestions.Count();
+        EssayCount = EssayQuestions.Count();
+    }
+
+    /// <summary>
+    /// Thêm một câu trống ngay sau câu <paramref name="after"/> (cùng phần với câu đó); nếu không chỉ định thì thêm vào cuối phần
+    /// trắc nghiệm hoặc tự luận. Điểm của phần được chia đều lại theo tổng điểm phần.
+    /// </summary>
+    public Question InsertAfter(Question? after, bool objective)
+    {
+        if (after != null) objective = after.Type.IsObjective();
+        var q = objective ? new Question { Type = QuestionType.MultipleChoice } : new Question { Type = QuestionType.Essay, Options = new() };
+        int at;
+        if (after != null && Questions.Contains(after)) at = Questions.IndexOf(after) + 1;
+        else at = objective ? McQuestions.Count() : Questions.Count;   // phần trắc nghiệm luôn đứng trước phần tự luận
+        Questions.Insert(at, q);
+        Renumber();
+        Distribute(q.Type);
+        return q;
+    }
+
+    /// <summary>Xoá một câu (bộ đề phải còn ít nhất một câu). Điểm của phần được chia đều lại.</summary>
+    public bool Remove(Question q)
+    {
+        if (Questions.Count <= 1 || !Questions.Remove(q)) return false;
+        Renumber();
+        if (q.Type.IsObjective()) { if (McCount == 0) McTotal = 0; else Distribute(QuestionType.MultipleChoice); }
+        else { if (EssayCount == 0) EssayTotal = 0; else Distribute(QuestionType.Essay); }
+        return true;
+    }
+
+    /// <summary>Chuyển một câu lên (<paramref name="delta"/> = -1) hoặc xuống (+1) trong phần của nó; điểm đi theo câu.</summary>
+    public bool Move(Question q, int delta)
+    {
+        int i = Questions.IndexOf(q), j = i + delta;
+        if (i < 0 || j < 0 || j >= Questions.Count) return false;
+        if (Questions[j].Type.IsObjective() != q.Type.IsObjective()) return false;   // không vượt sang phần khác
+        (Questions[i], Questions[j]) = (Questions[j], Questions[i]);
+        Renumber();
+        return true;
+    }
+
     /// <summary>Đổi số câu / tổng điểm từng phần nhưng giữ các câu đã soạn; điểm từng câu được chia lại nếu phần đó thay đổi.</summary>
     public void Resize(int mc, double mcTotal, int es, double esTotal)
     {

@@ -157,6 +157,63 @@ public class ShuffleScoringTests
     }
 
     [Fact]
+    public void Analysis_covers_every_objective_type_across_shuffled_codes()
+    {
+        var x = Sample(4);
+        var layouts = Shuffler.Build(x);
+        // 4 bài đúng hoàn toàn (mỗi mã một bài) + 1 bài bỏ trống + 1 bài bị huỷ (không tính).
+        var sheets = layouts.Select(l => Perfect(x, l)).ToList();
+        sheets.Add(new AnswerSheet { Code = "101" });
+        var revoked = Perfect(x, layouts[0]); revoked.Revoked = true; sheets.Add(revoked);
+        var stats = Scoring.Analyze(x, layouts, sheets);
+        Assert.Equal(x.McQuestions.Count(), stats.Count);
+        foreach (var s in stats)
+        {
+            var q = x.Questions.First(k => k.Id == s.QuestionId);
+            Assert.Equal(4, s.Answered);
+            Assert.Equal(4, s.Correct);
+            switch (q.Type)
+            {
+                case QuestionType.MultipleChoice:
+                    Assert.Equal(4, s.OptionCounts[q.Correct]);          // quy về phương án gốc dù đã trộn
+                    Assert.Equal(4, s.OptionCounts.Sum());
+                    break;
+                case QuestionType.MultiSelect:
+                    Assert.Equal(new[] { 0, 4, 0, 4 }, s.OptionCounts);
+                    break;
+                case QuestionType.TrueFalse:
+                    Assert.Equal(new[] { 4, 4, 4, 4 }, s.OptionCounts);  // số bài đúng từng ý
+                    break;
+            }
+        }
+    }
+
+    [Fact]
+    public void Analysis_reports_partial_true_false_and_common_wrong_short_answer()
+    {
+        var x = new ExamSet { Codes = 1 };
+        x.Questions.Add(new Question { Id = 1, Type = QuestionType.TrueFalse, Options = new() { "a", "b", "c", "d" }, TfKey = new() { true, true, false, false }, Points = 1 });
+        x.Questions.Add(new Question { Id = 2, Type = QuestionType.ShortAnswer, ShortKey = "12", Points = 1 });
+        var l = Shuffler.Build(x);
+        AnswerSheet Sheet(bool a, string shortAns)
+        {
+            var s = new AnswerSheet { Code = "101" };
+            s.Tf[1] = new() { [0] = a, [1] = true, [2] = false, [3] = false };
+            s.Short[2] = shortAns;
+            return s;
+        }
+        var stats = Scoring.Analyze(x, l, new[] { Sheet(true, "12"), Sheet(false, "21"), Sheet(false, " 21 ") });
+        var tf = stats.First(s => s.QuestionId == 1);
+        Assert.Equal(3, tf.Answered);
+        Assert.Equal(1, tf.Correct);
+        Assert.Equal(new[] { 1, 3, 3, 3 }, tf.OptionCounts);
+        var sa = stats.First(s => s.QuestionId == 2);
+        Assert.Equal(1, sa.Correct);
+        Assert.StartsWith("21 (2", sa.TopWrong);
+        Assert.Equal("a:Đ b:Đ c:S d:S", Scoring.KeyText(x.Questions[0]));
+    }
+
+    [Fact]
     public void Client_exam_carries_audio_extension()
     {
         var x = new ExamSet { Codes = 1 };

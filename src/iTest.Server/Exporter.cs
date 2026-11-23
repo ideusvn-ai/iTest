@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Text.Json;
 using ClosedXML.Excel;
 using ITest.Core;
+using ITest.UI;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -12,7 +13,44 @@ namespace ITest.Server;
 /// <summary>Xuất gói kết quả: bảng điểm + phân tích đề (Excel), bài tự luận đánh phách (PDF), biên bản (PDF), bài làm, nhật ký.</summary>
 public static class Exporter
 {
-    public static void ExportZip(RoomService room, string zipPath)
+    /// <summary>Ảnh công thức đã vẽ sẵn (khoá = mã LaTeX) để chèn vào PDF.</summary>
+    public sealed class Formulas : Dictionary<string, (byte[] png, double w, double h)?> { }
+
+    private const float Fs = 12f;
+
+    /// <summary>
+    /// Vẽ trước công thức toán trong đề phần tự luận thành ảnh. PHẢI gọi trên luồng giao diện (WPF vẽ công thức);
+    /// kết quả là dữ liệu thuần nên việc tạo PDF sau đó chạy được ở luồng nền.
+    /// </summary>
+    public static Formulas RenderFormulas(ExamSet exam)
+    {
+        var f = new Formulas();
+        foreach (var q in exam.EssayQuestions)
+            foreach (var seg in RichMath.Split(q.Text ?? ""))
+                if (seg.IsMath && !f.ContainsKey(seg.Text)) f[seg.Text] = RichMath.RenderPng(seg.Text, Fs);
+        return f;
+    }
+
+    /// <summary>Viết đoạn văn có công thức: chữ thường in bình thường, công thức chèn bằng ảnh đã vẽ.</summary>
+    private static void Rich(TextDescriptor t, string? text, Formulas? formulas, bool bold)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        foreach (var seg in RichMath.Split(text))
+        {
+            if (seg.IsMath && formulas != null && formulas.TryGetValue(seg.Text, out var f) && f is { } img)
+            {
+                float shift = (float)Math.Max(0, (img.h - Fs * 0.75) / 2);
+                t.Element().TranslateY(shift).Width((float)img.w).Height((float)img.h).Image(img.png);
+            }
+            else
+            {
+                var span = t.Span(seg.IsMath ? "$" + seg.Text + "$" : seg.Text);
+                if (bold) span.Bold();
+            }
+        }
+    }
+
+    public static void ExportZip(RoomService room, string zipPath, Formulas? formulas = null)
     {
         var tmp = Path.Combine(Path.GetTempPath(), "itest_export_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tmp);
@@ -21,7 +59,7 @@ public static class Exporter
             var cands = room.Candidates.Where(c => c.Sbd.Length > 0).OrderBy(c => c.Sbd).ToList();
             var phach = cands.Select((c, i) => (c, code: $"P{i + 1:000}")).ToList();
             WriteExcel(room, cands, phach, Path.Combine(tmp, "BangDiem_PhanTichDe.xlsx"));
-            WriteEssaysPdf(room, phach, Path.Combine(tmp, "BaiTuLuan_DanhPhach.pdf"));
+            WriteEssaysPdf(room, phach, Path.Combine(tmp, "BaiTuLuan_DanhPhach.pdf"), formulas);
             WriteReportPdf(room, cands, Path.Combine(tmp, "BienBanPhongThi.pdf"));
             File.WriteAllText(Path.Combine(tmp, "BaiLam.json"),
                 JsonSerializer.Serialize(cands.Select(c => c.Sheet), new JsonSerializerOptions { WriteIndented = true }));
@@ -33,6 +71,49 @@ public static class Exporter
         finally
         {
             try { Directory.Delete(tmp, true); } catch { }
+        }
+    }
+
+    /// <summary>Nhận xét ngắn cho một câu trong bảng phân tích đề.</summary>
+    public static string Remark(Question q, Scoring.ItemStat s)
+    {
+        if (s.Answered == 0) return "Chưa có bài trả lời";
+        switch (q.Type)
+        {
+            case QuestionType.MultipleChoice:
+            case QuestionType.YesNo:
+            {
+                int best = -1;
+                for (int k = 0; k < s.OptionCounts.Length; k++)
+                    if (k != q.Correct && (best < 0 || s.OptionCounts[k] > s.OptionCounts[best])) best = k;
+                return best >= 0 && s.OptionCounts[best] > 0 ? $"Nhiễu nổi bật: {(char)('A' + best)} ({s.OptionCounts[best] * 100 / s.Answered}%)" : "";
+            }
+            case QuestionType.MultiSelect:
+            {
+                // Phương án sai được chọn nhiều nhất, hoặc phương án đúng bị bỏ sót nhiều nhất.
+                int wrong = -1, missed = -1;
+                for (int k = 0; k < s.OptionCounts.Length; k++)
+                {
+                    bool key = q.Corrects.Contains(k);
+                    if (!key && (wrong < 0 || s.OptionCounts[k] > s.OptionCounts[wrong])) wrong = k;
+                    if (key && (missed < 0 || s.OptionCounts[k] < s.OptionCounts[missed])) missed = k;
+                }
+                var parts = new List<string>();
+                if (wrong >= 0 && s.OptionCounts[wrong] > 0) parts.Add($"hay chọn nhầm {(char)('A' + wrong)} ({s.OptionCounts[wrong] * 100 / s.Answered}%)");
+                if (missed >= 0 && s.OptionCounts[missed] < s.Answered) parts.Add($"hay bỏ sót {(char)('A' + missed)} ({(s.Answered - s.OptionCounts[missed]) * 100 / s.Answered}%)");
+                return parts.Count == 0 ? "" : char.ToUpper(parts[0][0]) + string.Join("; ", parts)[1..];
+            }
+            case QuestionType.TrueFalse:
+            {
+                int hard = -1;
+                for (int k = 0; k < s.OptionCounts.Length; k++)
+                    if (hard < 0 || s.OptionCounts[k] < s.OptionCounts[hard]) hard = k;
+                return hard >= 0 ? $"Ý khó nhất: {(char)('a' + hard)} (đúng {s.OptionCounts[hard] * 100 / s.Answered}%)" : "";
+            }
+            case QuestionType.ShortAnswer:
+                return s.TopWrong.Length > 0 ? "Trả lời sai hay gặp: " + s.TopWrong : "";
+            default:
+                return "";
         }
     }
 
@@ -79,7 +160,7 @@ public static class Exporter
         wp.Columns().AdjustToContents();
 
         var wa = wb.Worksheets.Add("Phân tích đề");
-        string[] ah = { "Câu (gốc)", "Nội dung", "Số lượt trả lời", "Tỉ lệ đúng", "Đáp án", "Chọn A", "Chọn B", "Chọn C", "Chọn D", "Phương án nhiễu nổi bật" };
+        string[] ah = { "Câu (gốc)", "Loại câu", "Nội dung", "Số lượt trả lời", "Tỉ lệ đúng", "Đáp án", "A / ý a", "B / ý b", "C / ý c", "D / ý d", "Nhận xét" };
         for (int i = 0; i < ah.Length; i++) wa.Cell(1, i + 1).Value = ah[i];
         wa.Range(1, 1, 1, ah.Length).Style.Font.SetBold().Fill.SetBackgroundColor(XLColor.FromHtml("#DBEAFE"));
         var stats = Scoring.Analyze(exam, room.Layouts, cands.Select(c => c.Sheet)).OrderBy(s => s.CorrectRate).ToList();
@@ -89,26 +170,27 @@ public static class Exporter
         {
             var q = byId[s.QuestionId];
             wa.Cell(ar, 1).Value = s.QuestionId;
-            wa.Cell(ar, 2).Value = q.Text.Length > 80 ? q.Text[..80] + "…" : q.Text;
-            wa.Cell(ar, 3).Value = s.Answered;
-            wa.Cell(ar, 4).Value = Math.Round(s.CorrectRate, 4);
-            wa.Cell(ar, 4).Style.NumberFormat.Format = "0%";
-            wa.Cell(ar, 5).Value = q.Correct >= 0 ? ((char)('A' + q.Correct)).ToString() : "";
-            for (int k = 0; k < Math.Min(4, s.OptionCounts.Length); k++) wa.Cell(ar, 6 + k).Value = s.OptionCounts[k];
-            int bestWrong = -1;
-            for (int k = 0; k < s.OptionCounts.Length; k++)
-                if (k != q.Correct && (bestWrong < 0 || s.OptionCounts[k] > s.OptionCounts[bestWrong])) bestWrong = k;
-            if (bestWrong >= 0 && s.Answered > 0 && s.OptionCounts[bestWrong] > 0)
-                wa.Cell(ar, 10).Value = $"{(char)('A' + bestWrong)} ({s.OptionCounts[bestWrong] * 100 / s.Answered}%)";
+            wa.Cell(ar, 2).Value = q.Type.Label();
+            wa.Cell(ar, 3).Value = q.Text.Length > 80 ? q.Text[..80] + "…" : q.Text;
+            wa.Cell(ar, 4).Value = s.Answered;
+            wa.Cell(ar, 5).Value = Math.Round(s.CorrectRate, 4);
+            wa.Cell(ar, 5).Style.NumberFormat.Format = "0%";
+            wa.Cell(ar, 6).Value = Scoring.KeyText(q);
+            for (int k = 0; k < Math.Min(4, s.OptionCounts.Length); k++) wa.Cell(ar, 7 + k).Value = s.OptionCounts[k];
+            wa.Cell(ar, 11).Value = Remark(q, s);
             if (s.CorrectRate < 0.4 && s.Answered > 0) wa.Range(ar, 1, ar, ah.Length).Style.Fill.SetBackgroundColor(XLColor.FromHtml("#FEE2E2"));
             ar++;
         }
+        ar++;
+        wa.Cell(ar++, 1).Value = "Cách đọc: “Tỉ lệ đúng” là tỉ lệ bài trả lời đúng hoàn toàn câu đó. Cột A–D: với câu một/nhiều đáp án là số lượt chọn từng phương án;";
+        wa.Cell(ar++, 1).Value = "với câu Đúng/Sai nhiều ý là số bài trả lời đúng từng ý a–d. Dòng tô đỏ: tỉ lệ đúng dưới 40%.";
         wa.Columns().AdjustToContents();
-        wa.Column(2).Width = 60;
+        wa.Column(1).Width = 10;
+        wa.Column(3).Width = 60;
         wb.SaveAs(path);
     }
 
-    private static void WriteEssaysPdf(RoomService room, List<(Candidate c, string code)> phach, string path)
+    private static void WriteEssaysPdf(RoomService room, List<(Candidate c, string code)> phach, string path, Formulas? formulas)
     {
         var exam = room.Exam;
         var essays = exam.EssayQuestions.ToList();
@@ -137,7 +219,11 @@ public static class Exporter
                             i++;
                             int no = layout != null ? layout.Order.IndexOf(q.Id) + 1 : i;
                             var ans = c.Sheet.Essays.TryGetValue(no, out var t) ? t : "";
-                            col.Item().Text($"Câu {no} ({F(q.Points)} điểm). {q.Text}").Bold();
+                            col.Item().Text(t =>
+                            {
+                                t.Span($"Câu {no} ({F(q.Points)} điểm). ").Bold();
+                                Rich(t, q.Text, formulas, bold: true);
+                            });
                             col.Item().Border(0.5f).Padding(8).MinHeight(80).Text(string.IsNullOrWhiteSpace(ans) ? "(bỏ trống)" : ans);
                             col.Item().Text("Điểm: ............   Giám khảo: ......................").FontSize(10);
                         }

@@ -19,6 +19,10 @@ public sealed class ImportedQuestion
     public List<int> Corrects { get; } = new();
     public List<bool?> TfKey { get; } = new();
     public string ShortKey { get; set; } = "";
+    /// <summary>Các phương án được đánh dấu là đúng trong file Word (gạch chân, tô đỏ hoặc có dấu *).</summary>
+    public List<int> Marked { get; } = new();
+    /// <summary>Câu có các ý a) b) c) d) (Đúng/Sai nhiều ý) trong file Word.</summary>
+    public bool Statements { get; set; }
     public double? Points { get; set; }
     public byte[]? Image { get; set; }
     public string ImageExt { get; set; } = ".png";
@@ -28,6 +32,8 @@ public sealed class ImportedQuestion
 /// Nhập thông minh:
 ///  • Word: dòng bắt đầu "Câu n." / "Câu n:" là câu hỏi; "A." "B." "C." "D." là phương án (có thể nhiều phương án trên một dòng);
 ///    đáp án đúng được gạch chân, tô đỏ hoặc có dấu * phía trước; dòng có "TỰ LUẬN" chuyển sang phần tự luận; ảnh trong đoạn được giữ lại.
+///    Loại câu được nhận ra tự động: đánh dấu từ 2 phương án trở lên → nhiều đáp án đúng; chỉ có hai phương án "Đúng" và "Sai" →
+///    trắc nghiệm đúng/sai; các ý viết thường a) b) c) d) → Đúng/Sai nhiều ý (ý được đánh dấu là ý Đúng).
 ///  • Excel: hàng 1 là tiêu đề; các cột: Loại | Nội dung | A | B | C | D | Đáp án | Điểm.
 ///    Loại: TN (1 đáp án) · NDA (nhiều đáp án, Đáp án "A,C") · DS (Đúng/Sai, cột A–D là các ý, Đáp án "Đ,S,Đ,S")
 ///          · TLN (trả lời ngắn, Đáp án là giá trị đúng) · TL (tự luận, Đáp án là hướng dẫn chấm).
@@ -36,6 +42,8 @@ public static class Importer
 {
     private static readonly Regex QStart = new(@"^\s*Câu\s*(\d+)\s*[\.:\)]?\s*(.*)$", RegexOptions.IgnoreCase);
     private static readonly Regex OptSplit = new(@"(?<![A-Za-zÀ-ỹ])\*?([A-D])\s*[\.\)]\s*", RegexOptions.Compiled);
+    // Các ý của câu Đúng/Sai: chữ thường a) b) c) d) (bắt buộc dấu ngoặc để không nhầm với chữ trong câu).
+    private static readonly Regex StmtSplit = new(@"(?<![A-Za-zÀ-ỹ0-9])\*?([a-d])\s*\)\s*", RegexOptions.Compiled);
 
     public static List<ImportedQuestion> FromWord(string path)
     {
@@ -94,17 +102,58 @@ public static class Importer
                 continue;
             }
             if (cur == null) continue;
-            if (cur.Type == QuestionType.MultipleChoice && OptSplit.IsMatch(text))
+            if (cur.Type == QuestionType.MultipleChoice && !cur.Statements && OptSplit.IsMatch(text))
                 ParseOptionsInto(cur, text, marked, 0, appendStemIfNoOption: false);
+            else if (cur.Type == QuestionType.MultipleChoice && (cur.Statements || cur.Options.Count == 0) && StartsWithStatement(text))
+            {
+                cur.Statements = true;
+                ParseOptionsInto(cur, text, marked, 0, appendStemIfNoOption: false, StmtSplit);
+            }
             else if (cur.Options.Count == 0)
                 cur.Text = (cur.Text + "\n" + text.Trim()).Trim();
         }
+        foreach (var q in list) Classify(q);
         return list;
     }
 
-    private static void ParseOptionsInto(ImportedQuestion q, string text, List<bool> marked, int offset, bool appendStemIfNoOption)
+    private static bool StartsWithStatement(string text)
     {
-        var ms = OptSplit.Matches(text).Cast<Match>().Where(m => m.Index == 0 || char.IsWhiteSpace(text[m.Index - 1])).ToList();
+        var m = StmtSplit.Match(text);
+        return m.Success && text[..m.Index].Trim().Length == 0;
+    }
+
+    /// <summary>Suy ra loại câu từ những gì đọc được trong file Word.</summary>
+    private static void Classify(ImportedQuestion q)
+    {
+        if (q.Type != QuestionType.MultipleChoice) return;
+        if (q.Statements)
+        {
+            q.Type = QuestionType.TrueFalse;
+            // Có ít nhất một ý được đánh dấu: ý đánh dấu là Đúng, còn lại là Sai. Không ý nào đánh dấu: để trống cho người soạn chọn.
+            for (int k = 0; k < q.Options.Count; k++) q.TfKey.Add(q.Marked.Count == 0 ? null : q.Marked.Contains(k));
+            q.Correct = -1;
+            return;
+        }
+        static string N(string s) => s.Trim().TrimEnd('.').ToLowerInvariant();
+        if (q.Options.Count == 2 && N(q.Options[0]) == "đúng" && N(q.Options[1]) == "sai")
+        {
+            q.Type = QuestionType.YesNo;
+            q.Options.Clear();
+            q.Options.AddRange(QuestionTypes.YesNoOptions);
+            q.Correct = q.Marked.Count == 1 ? q.Marked[0] : -1;
+            return;
+        }
+        if (q.Marked.Count >= 2)
+        {
+            q.Type = QuestionType.MultiSelect;
+            q.Corrects.AddRange(q.Marked.Distinct().OrderBy(i => i));
+            q.Correct = -1;
+        }
+    }
+
+    private static void ParseOptionsInto(ImportedQuestion q, string text, List<bool> marked, int offset, bool appendStemIfNoOption, Regex? splitter = null)
+    {
+        var ms = (splitter ?? OptSplit).Matches(text).Cast<Match>().Where(m => m.Index == 0 || char.IsWhiteSpace(text[m.Index - 1])).ToList();
         if (ms.Count == 0 || q.Type == QuestionType.Essay)
         {
             if (appendStemIfNoOption || q.Options.Count == 0) q.Text = (q.Text + " " + text.Trim()).Trim();
@@ -121,7 +170,7 @@ public static class Importer
             bool under = false;
             for (int k = start; k < end && offset + k < marked.Count; k++) if (marked[offset + k] && !char.IsWhiteSpace(text[k])) { under = true; break; }
             if (ms[i].Index + offset < marked.Count && marked[ms[i].Index + offset]) under = true;
-            if (star || under) q.Correct = q.Options.Count;
+            if (star || under) { q.Correct = q.Options.Count; q.Marked.Add(q.Options.Count); }
             q.Options.Add(opt);
         }
     }

@@ -406,8 +406,8 @@ public partial class MainWindow : Window
         AnalysisText.Text = stats.Count == 0 ? "Chưa có dữ liệu." : string.Join("\n", stats.Select(s =>
         {
             var q = r.Exam.Questions.First(x => x.Id == s.QuestionId);
-            int wrong = Enumerable.Range(0, s.OptionCounts.Length).Where(k => k != q.Correct).OrderByDescending(k => s.OptionCounts[k]).FirstOrDefault();
-            return $"Câu {s.QuestionId}: đúng {s.CorrectRate:P0} · nhiễu {(char)('A' + wrong)} ({s.OptionCounts[wrong]} lượt)";
+            var remark = Exporter.Remark(q, s);
+            return $"Câu {s.QuestionId}: đúng {s.CorrectRate:P0}" + (remark.Length > 0 ? " · " + char.ToLower(remark[0]) + remark[1..] : "");
         }));
     }
 
@@ -596,7 +596,9 @@ public partial class MainWindow : Window
             var room = _room;
             var path = dlg.FileName;
             Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
-            await Task.Run(() => Exporter.ExportZip(room, path));
+            // Công thức toán trong đề tự luận được vẽ ở đây (luồng giao diện), phần đóng gói nặng chạy nền.
+            var formulas = Exporter.RenderFormulas(room.Exam);
+            await Task.Run(() => Exporter.ExportZip(room, path, formulas));
             _room.Exported = true;
             _room.Log("XUẤT FILE", "", $"Đã xuất {Path.GetFileName(dlg.FileName)} · bảng điểm, bài tự luận, biên bản, phân tích đề");
             MessageBox.Show(this, "Đã xuất kết quả:\n" + dlg.FileName, "Xuất kết quả", MessageBoxButton.OK, MessageBoxImage.Information);

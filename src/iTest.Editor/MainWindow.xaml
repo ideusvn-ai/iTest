@@ -191,6 +191,18 @@
                         <DockPanel><TextBlock x:Name="DoneCount" DockPanel.Dock="Right" Style="{StaticResource Hint}"/><TextBlock Text="Câu hỏi" Style="{StaticResource H2}" Margin="0"/></DockPanel>
                         <ProgressBar x:Name="DoneBar" Height="6" Maximum="1" Margin="0,6,0,8" Foreground="{StaticResource Teal}"/>
                     </StackPanel>
+                    <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                        <UniformGrid Columns="4">
+                            <Button x:Name="QAddBtn" Content="＋ Thêm" Padding="4,0" MinHeight="34" Margin="0,0,3,0" IsTabStop="False" Click="AddQuestion_Click"
+                                    ToolTip="Thêm một câu trống ngay sau câu đang chọn (cùng phần). Điểm của phần được chia đều lại."/>
+                            <Button x:Name="QDelBtn" Content="Xoá" Padding="4,0" MinHeight="34" Margin="3,0" IsTabStop="False" Click="DeleteQuestion_Click"
+                                    ToolTip="Xoá câu đang chọn. Điểm của phần được chia đều lại cho các câu còn lại."/>
+                            <Button x:Name="QUpBtn" Content="▲" Padding="4,0" MinHeight="34" Margin="3,0" IsTabStop="False" Click="MoveUp_Click" ToolTip="Chuyển câu đang chọn lên trên (trong cùng phần)"/>
+                            <Button x:Name="QDownBtn" Content="▼" Padding="4,0" MinHeight="34" Margin="3,0,0,0" IsTabStop="False" Click="MoveDown_Click" ToolTip="Chuyển câu đang chọn xuống dưới (trong cùng phần)"/>
+                        </UniformGrid>
+                        <Button x:Name="QAddEssayBtn" Content="＋ Thêm câu tự luận" MinHeight="32" Margin="0,6,0,0" Style="{StaticResource BtnGhost}" IsTabStop="False" Click="AddEssay_Click"
+                                ToolTip="Thêm một câu vào cuối phần tự luận"/>
+                    </StackPanel>
                     <ListBox x:Name="QList" BorderThickness="0" SelectionChanged="QList_SelectionChanged" HorizontalContentAlignment="Stretch">
                         <ListBox.ItemTemplate>
                             <DataTemplate>

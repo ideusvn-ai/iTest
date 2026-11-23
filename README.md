@@ -139,10 +139,18 @@ bộ gõ TELEX/VNI và kết nối mã hoá. GitHub Actions chạy bộ kiểm t
 - **Bộ gõ tiếng Việt** có sẵn (TELEX/VNI) có thể **tắt** — trong Editor ở góc trên phải, trên máy thí sinh ở nút ⚙ — khi soạn/làm bài tiếng Anh
   hoặc khi máy đã bật Unikey. Trong công thức `$...$` bộ gõ tự không bỏ dấu.
 
+## Soạn và nhập câu hỏi
+- **Thêm / xoá / đổi thứ tự từng câu**: dùng các nút *＋ Thêm*, *Xoá*, *▲*, *▼* dưới danh sách câu hỏi trong Editor. Câu chỉ di chuyển trong phần của nó
+  (trắc nghiệm hoặc tự luận); khi thêm hoặc xoá câu, điểm của phần đó được chia đều lại theo tổng điểm phần.
+- **Nhập từ Word** tự nhận loại câu: đánh dấu (gạch chân, tô đỏ hoặc dấu `*`) từ 2 phương án trở lên → *nhiều đáp án đúng*; chỉ có hai phương án
+  “Đúng” và “Sai” → *trắc nghiệm đúng/sai*; các ý viết thường `a)` `b)` `c)` `d)` → *Đúng/Sai nhiều ý* (ý được đánh dấu là ý Đúng).
+- **Phân tích đề** trong file kết quả có mọi loại câu khách quan, kèm nhận xét: phương án nhiễu nổi bật, phương án đúng hay bị bỏ sót, ý khó nhất.
+- **Bài tự luận đánh phách (PDF)**: công thức `$...$` trong đề được vẽ thành công thức thật.
+
 ## Giới hạn còn lại
 - Công thức MathType/Equation trong file Word nhập vào được giữ ở dạng văn bản; nên soạn lại bằng nút ∑ (LaTeX).
-- Nhập từ Word mới nhận câu 1 đáp án và tự luận; các loại câu mới nhập qua Excel hoặc chọn *Loại câu* trong Editor.
-- Phân tích đề (tỉ lệ đúng từng phương án) hiện áp dụng cho câu trắc nghiệm 1 đáp án.
+- Công thức do thí sinh gõ trong bài tự luận được in nguyên văn (không vẽ thành công thức).
+- Các file `.exe` chưa được ký số nên trình duyệt và Windows còn cảnh báo khi tải; xem mục *Ký số các file .exe*.
 
 ## Cấu trúc mã nguồn
 ```

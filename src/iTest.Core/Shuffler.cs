@@ -175,36 +175,85 @@ public static class Scoring
     /// <summary>Giữ tên cũ cho tương thích.</summary>
     public static McResult GradeMc(ExamSet exam, CodeLayout layout, AnswerSheet sheet) => GradeObjective(exam, layout, sheet);
 
-    /// <summary>Thống kê từng câu một đáp án: tỉ lệ đúng và số lượt chọn từng phương án gốc.</summary>
-    public sealed record ItemStat(int QuestionId, int Answered, int Correct, int[] OptionCounts)
+    /// <summary>
+    /// Thống kê một câu khách quan. <c>Correct</c> = số bài trả lời đúng hoàn toàn.
+    /// <c>OptionCounts</c> (theo thứ tự phương án gốc): với câu một/nhiều đáp án là số lượt chọn từng phương án;
+    /// với câu Đúng/Sai nhiều ý là số bài trả lời đúng từng ý. <c>TopWrong</c>: câu trả lời sai gặp nhiều nhất (câu trả lời ngắn).
+    /// </summary>
+    public sealed record ItemStat(int QuestionId, int Answered, int Correct, int[] OptionCounts, string TopWrong = "")
     {
         public double CorrectRate => Answered == 0 ? 0 : (double)Correct / Answered;
     }
 
+    /// <summary>Đáp án của câu theo thứ tự gốc (đề 101), dạng chữ để in trong bảng phân tích và đáp án.</summary>
+    public static string KeyText(Question q) => q.Type switch
+    {
+        QuestionType.MultipleChoice or QuestionType.YesNo => q.Correct >= 0 ? ((char)('A' + q.Correct)).ToString() : "",
+        QuestionType.MultiSelect => string.Join(", ", q.Corrects.OrderBy(i => i).Select(i => ((char)('A' + i)).ToString())),
+        QuestionType.TrueFalse => string.Join(" ", q.TfKey.Select((k, i) => $"{(char)('a' + i)}:{(k == true ? "Đ" : k == false ? "S" : "?")}")),
+        QuestionType.ShortAnswer => q.ShortKey,
+        _ => ""
+    };
+
+    /// <summary>Phân tích mọi câu khách quan từ các bài làm (bỏ bài bị huỷ).</summary>
     public static List<ItemStat> Analyze(ExamSet exam, IReadOnlyList<CodeLayout> layouts, IEnumerable<AnswerSheet> sheets)
     {
-        var mc = exam.Questions.Where(q => q.Type.IsSingleChoice()).ToList();
-        var stats = mc.ToDictionary(q => q.Id, q => (answered: 0, correct: 0, counts: new int[q.Options.Count]));
+        var objective = exam.Questions.Where(q => q.Type.IsObjective()).ToList();
+        var answered = objective.ToDictionary(q => q.Id, _ => 0);
+        var correct = objective.ToDictionary(q => q.Id, _ => 0);
+        var counts = objective.ToDictionary(q => q.Id, q => new int[q.Type.HasOptions() ? q.Options.Count : 0]);
+        var wrongTexts = objective.Where(q => q.Type == QuestionType.ShortAnswer).ToDictionary(q => q.Id, _ => new Dictionary<string, int>());
         var byCode = layouts.ToDictionary(l => l.Code);
         var byId = exam.Questions.ToDictionary(q => q.Id);
         foreach (var s in sheets.Where(s => !s.Revoked))
         {
             if (!byCode.TryGetValue(s.Code, out var layout)) continue;
-            foreach (var (no, shown) in s.Choices)
+            for (int no = 1; no <= layout.Order.Count; no++)
             {
-                if (no < 1 || no > layout.Order.Count) continue;
-                var id = layout.Order[no - 1];
-                if (!stats.ContainsKey(id)) continue;
-                var perm = layout.PermOf(byId[id]);
-                if (shown < 0 || shown >= perm.Length) continue;
-                var orig = perm[shown];
-                var st = stats[id];
-                st.answered++;
-                if (orig == byId[id].Correct) st.correct++;
-                st.counts[orig]++;
-                stats[id] = st;
+                if (!byId.TryGetValue(layout.Order[no - 1], out var q) || !q.Type.IsObjective()) continue;
+                var (_, full, did) = GradeOne(q, layout, s, no);
+                if (!did) continue;
+                answered[q.Id]++;
+                if (full) correct[q.Id]++;
+                var perm = layout.PermOf(q);
+                var cnt = counts[q.Id];
+                switch (q.Type)
+                {
+                    case QuestionType.MultipleChoice:
+                    case QuestionType.YesNo:
+                        if (s.Choices.TryGetValue(no, out var shown) && shown >= 0 && shown < perm.Length && perm[shown] < cnt.Length) cnt[perm[shown]]++;
+                        break;
+                    case QuestionType.MultiSelect:
+                        if (s.Multi.TryGetValue(no, out var picked))
+                            foreach (var k in picked.Distinct())
+                                if (k >= 0 && k < perm.Length && perm[k] < cnt.Length) cnt[perm[k]]++;
+                        break;
+                    case QuestionType.TrueFalse:
+                        if (s.Tf.TryGetValue(no, out var tf))
+                            foreach (var (k, val) in tf)
+                                if (k >= 0 && k < perm.Length && perm[k] < cnt.Length && perm[k] < q.TfKey.Count && q.TfKey[perm[k]] == val) cnt[perm[k]]++;
+                        break;
+                    case QuestionType.ShortAnswer:
+                        if (!full && s.Short.TryGetValue(no, out var ans))
+                        {
+                            var key = ans.Trim();
+                            if (key.Length > 40) key = key[..40] + "…";
+                            var d = wrongTexts[q.Id];
+                            d[key] = d.GetValueOrDefault(key) + 1;
+                        }
+                        break;
+                }
             }
         }
-        return stats.Select(kv => new ItemStat(kv.Key, kv.Value.answered, kv.Value.correct, kv.Value.counts)).ToList();
+        return objective.Select(q =>
+        {
+            string top = "";
+            if (wrongTexts.TryGetValue(q.Id, out var d) && d.Count > 0)
+            {
+                var best = d.OrderByDescending(kv => kv.Value).First();
+                top = $"{best.Key} ({best.Value} lượt)";
+            }
+            return new ItemStat(q.Id, answered[q.Id], correct[q.Id], counts[q.Id], top);
+        }).ToList();
     }
 }
