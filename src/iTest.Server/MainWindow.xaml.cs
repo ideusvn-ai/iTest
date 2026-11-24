@@ -364,7 +364,8 @@ public partial class MainWindow : Window
         CollectBtn.IsEnabled = r.CanCollectAll;
         int wait = r.SecondsLeft - r.SubmitWindowMinutes * 60;
         CollectBtn.Content = r.Phase == Phase.Collected ? "✓ Đã thu bài" : r.Phase == Phase.Running && wait > 0 ? $"Thu bài · mở sau {RoomService.Fmt(wait)}" : "Thu bài tất cả";
-        bool canClose = r.Phase == Phase.Open || r.Exported;
+        if (r.Phase == Phase.Running && !r.CanCollectAll && r.Candidates.Any(c => c.CollectDeadline != null) && wait <= 0) CollectBtn.Content = "Đang thu bài…";
+        bool canClose = (r.Phase == Phase.Open || r.Exported) && !r.Exporting;
         CloseBtn.IsEnabled = canClose;
         CloseBtn.ToolTip = r.Phase == Phase.Open ? "Đóng phòng khi chưa phát đề; các máy thí sinh sẽ tự thoát"
             : r.Exported ? "Đóng phòng và mở khoá các máy thí sinh" : "Chỉ đóng được sau khi đã xuất kết quả";
@@ -386,9 +387,9 @@ public partial class MainWindow : Window
             : r.Phase == Phase.Open ? "Sao lưu tự động sẽ bắt đầu sau khi phát đề"
             : $"Sao lưu tự động sau {30 - r.TickCount % 30} giây · {r.BackupDir}";
         BackupBar.Value = r.Phase == Phase.Running ? r.TickCount % 30 : 0;
-        ExportBtn.IsEnabled = r.Phase == Phase.Collected;
-        SchoolExportBtn.IsEnabled = r.Phase == Phase.Collected;
-        ExportBtn.Content = r.Exported ? "✓ Đã xuất · Xuất lại" : "⬇  Xuất kết quả";
+        ExportBtn.IsEnabled = r.Phase == Phase.Collected && !r.Exporting;
+        SchoolExportBtn.IsEnabled = r.Phase == Phase.Collected && !r.Exporting;
+        ExportBtn.Content = r.Exporting ? "Đang đóng gói kết quả…" : r.Exported ? "✓ Đã xuất · Xuất lại" : "⬇  Xuất kết quả";
         ExportHint.Text = r.Phase == Phase.Collected
             ? "Gói .zip gồm: bảng điểm và phân tích đề (Excel), bài tự luận đánh phách (PDF), biên bản phòng thi có chỗ ký (PDF), toàn bộ bài làm và nhật ký."
             : "Có thể xuất sau khi đã thu bài tất cả thí sinh.";
@@ -581,7 +582,7 @@ public partial class MainWindow : Window
 
     private async void Export_Click(object sender, RoutedEventArgs e)
     {
-        if (_room == null || _room.Phase != Phase.Collected) return;
+        if (_room == null || _room.Phase != Phase.Collected || _room.Exporting) return;
         var dlg = new SaveFileDialog
         {
             Filter = "Gói kết quả (*.zip)|*.zip",
@@ -589,22 +590,27 @@ public partial class MainWindow : Window
             Title = "Xuất kết quả"
         };
         if (dlg.ShowDialog(this) != true) return;
+        var room = _room;
         try
         {
-            ExportBtn.IsEnabled = false;
+            // Trong lúc xuất: khoá nút xuất và chặn đóng phòng / thoát ứng dụng cho tới khi gói kết quả ghi xong.
+            room.Exporting = true;
+            Refresh();
             ExportBtn.Content = "Đang đóng gói kết quả…";
-            var room = _room;
             var path = dlg.FileName;
             Mouse.OverrideCursor = System.Windows.Input.Cursors.Wait;
-            // Công thức toán trong đề tự luận được vẽ ở đây (luồng giao diện), phần đóng gói nặng chạy nền.
+            // Chụp một bản dữ liệu riêng của phòng thi trên luồng giao diện; phần đóng gói nặng chạy nền trên bản sao đó.
+            // Công thức toán trong đề tự luận cũng được vẽ ở đây (WPF chỉ vẽ được trên luồng giao diện).
+            var data = room.Snapshot();
             var formulas = Exporter.RenderFormulas(room.Exam);
-            await Task.Run(() => Exporter.ExportZip(room, path, formulas));
-            _room.Exported = true;
-            _room.Log("XUẤT FILE", "", $"Đã xuất {Path.GetFileName(dlg.FileName)} · bảng điểm, bài tự luận, biên bản, phân tích đề");
+            await Task.Run(() => Exporter.ExportZip(data, path, formulas));
+            room.Exported = true;
+            room.SaveState();
+            room.Log("XUẤT FILE", "", $"Đã xuất {Path.GetFileName(dlg.FileName)} · bảng điểm, bài tự luận, biên bản, phân tích đề");
             MessageBox.Show(this, "Đã xuất kết quả:\n" + dlg.FileName, "Xuất kết quả", MessageBoxButton.OK, MessageBoxImage.Information);
         }
-        catch (Exception ex) { MessageBox.Show(this, "Lỗi khi xuất kết quả: " + ex.Message, "Xuất kết quả", MessageBoxButton.OK, MessageBoxImage.Error); }
-        finally { Mouse.OverrideCursor = null; Refresh(); }
+        catch (Exception ex) { MessageBox.Show(this, "Lỗi khi xuất kết quả: " + ex.Message + "\n\nGói kết quả cũ (nếu có) vẫn được giữ nguyên.", "Xuất kết quả", MessageBoxButton.OK, MessageBoxImage.Error); }
+        finally { room.Exporting = false; Mouse.OverrideCursor = null; Refresh(); }
     }
 
     private void SchoolExport_Click(object sender, RoutedEventArgs e)
@@ -616,6 +622,7 @@ public partial class MainWindow : Window
     private void CloseRoom_Click(object sender, RoutedEventArgs e)
     {
         if (_room == null || !(_room.Phase == Phase.Open || _room.Exported)) return;
+        if (_room.Exporting) { MessageBox.Show(this, "Đang xuất kết quả. Hãy chờ xuất xong rồi mới đóng phòng.", "Đóng phòng", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         var msg = _room.Phase == Phase.Open
             ? $"Đóng phòng khi chưa phát đề?\n\n{_room.Candidates.Count} máy thí sinh đang trong phòng chờ sẽ tự thoát iTest."
             : "Đóng phòng thi và mở khoá tất cả máy thí sinh?";
@@ -633,6 +640,11 @@ public partial class MainWindow : Window
     private void OnClosing(object? sender, CancelEventArgs e)
     {
         if (_room == null) return;
+        if (_room.Exporting)
+        {
+            MessageBox.Show(this, "Đang xuất kết quả. Hãy chờ xuất xong rồi mới thoát.", "iTest-Server", MessageBoxButton.OK, MessageBoxImage.Information);
+            e.Cancel = true; return;
+        }
         if (_room.Phase == Phase.Running)
         {
             MessageBox.Show(this, "Phòng thi đang diễn ra. Hãy thu bài và xuất kết quả trước khi thoát.", "iTest-Server");

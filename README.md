@@ -26,7 +26,7 @@ Bộ ba ứng dụng Windows chạy trong mạng LAN, không cần Internet:
 
 ## Tự build trên máy Windows
 
-Cần: Windows 10/11, [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0), [Inno Setup 6](https://jrsoftware.org/isdl.php).
+Cần: Windows 10/11, [.NET 11 SDK](https://dotnet.microsoft.com/download/dotnet/11.0), [Inno Setup 6](https://jrsoftware.org/isdl.php).
 
 ```powershell
 $p = @('-c','Release','-r','win-x64','--self-contained','true','-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true')

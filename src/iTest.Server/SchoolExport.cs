@@ -21,16 +21,18 @@ public static class SchoolExport
 {
     public sealed record Row(string Sbd, string Name, string Birth, string Class, double? Score, string Note);
 
-    public static List<Row> Rows(RoomService room, int decimals)
+    /// <summary>Các dòng điểm. Chỉ bài ĐÃ NỘP và không bị huỷ mới có điểm; bài chưa nộp, bị đình chỉ để trống điểm kèm ghi chú.</summary>
+    public static List<Row> Rows(ExportData room, int decimals)
     {
         var list = new List<Row>();
         foreach (var c in room.Candidates.Where(c => c.Sbd.Length > 0))
         {
             var layout = room.Layouts.FirstOrDefault(l => l.Code == c.Sheet.Code);
-            double? score = layout == null ? null : Math.Round(Scoring.GradeObjective(room.Exam, layout, c.Sheet).Score, decimals, MidpointRounding.AwayFromZero);
+            double? score = null;
             string note = "";
-            if (c.Sheet.Revoked) { score = null; note = "Đình chỉ · huỷ kết quả"; }
-            else if (c.Status != CandStatus.Done) note = "Chưa nộp bài";
+            if (c.Sheet.Revoked) note = "Đình chỉ · huỷ kết quả";
+            else if (c.Status != CandStatus.Done || layout == null) note = "Chưa nộp bài";
+            else score = Math.Round(Scoring.GradeObjective(room.Exam, layout, c.Sheet).Score, decimals, MidpointRounding.AwayFromZero);
             list.Add(new Row(c.Sbd, c.FullName, c.BirthDate, c.ClassName, score, note));
         }
         return list.OrderBy(r => r.Class).ThenBy(r => LastName(r.Name)).ThenBy(r => r.Name).ToList();
@@ -69,19 +71,38 @@ public static class SchoolExport
     }
 
     // ---------------- Cách 1: file điểm theo lớp ----------------
-    public static void WriteByClass(RoomService room, string path, int decimals)
+    /// <summary>
+    /// Tên sheet hợp lệ và không trùng: bỏ ký tự Excel cấm, cắt 31 ký tự; nếu trùng (Excel không phân biệt hoa/thường)
+    /// thì thêm hậu tố (2), (3)… thay vì báo lỗi hoặc gộp nhầm hai lớp.
+    /// </summary>
+    public static string UniqueSheetName(string raw, ISet<string> used)
+    {
+        var name = new string((raw ?? "").Where(ch => !"[]*?/\\:".Contains(ch) && !char.IsControl(ch)).ToArray()).Trim().Trim('\'');
+        if (name.Length == 0) name = "Lop";
+        if (name.Length > 31) name = name[..31];
+        var candidate = name;
+        for (int n = 2; !used.Add(candidate.ToUpperInvariant()); n++)
+        {
+            var suffix = $" ({n})";
+            candidate = (name.Length + suffix.Length > 31 ? name[..(31 - suffix.Length)] : name) + suffix;
+        }
+        return candidate;
+    }
+
+    public static void WriteByClass(ExportData room, string path, int decimals)
     {
         var rows = Rows(room, decimals);
         using var wb = new XLWorkbook();
-        foreach (var g in rows.GroupBy(r => string.IsNullOrWhiteSpace(r.Class) ? "Chưa rõ lớp" : r.Class))
+        var usedNames = new HashSet<string>();
+        // Gộp theo tên lớp đã chuẩn hoá ("10a1", " 10A1 " là một lớp) để không tạo hai sheet cho cùng một lớp.
+        foreach (var g in rows.GroupBy(r => string.IsNullOrWhiteSpace(r.Class) ? "Chưa rõ lớp" : string.Join(' ', r.Class.Split(' ', StringSplitOptions.RemoveEmptyEntries)).ToUpperInvariant()))
         {
-            var name = new string(g.Key.Where(ch => !"[]*?/\\:".Contains(ch)).ToArray());
-            var ws = wb.Worksheets.Add(name.Length > 31 ? name[..31] : name.Length == 0 ? "Lop" : name);
+            var ws = wb.Worksheets.Add(UniqueSheetName(g.Key, usedNames));
             string[] head = { "STT", "Mã HS / SBD", "Họ và tên", "Ngày sinh", "Lớp", $"Điểm {room.Exam.Subject}", "Ghi chú" };
             for (int i = 0; i < head.Length; i++) ws.Cell(1, i + 1).Value = head[i];
             ws.Range(1, 1, 1, head.Length).Style.Font.SetBold().Fill.SetBackgroundColor(XLColor.FromHtml("#DBEAFE"));
             int r = 2;
-            foreach (var x in g)
+            foreach (var x in g.OrderBy(v => LastName(v.Name)).ThenBy(v => v.Name))
             {
                 ws.Cell(r, 1).Value = r - 1;
                 ws.Cell(r, 2).Value = x.Sbd;
@@ -139,38 +160,77 @@ public static class SchoolExport
         return null;
     }
 
-    public sealed record FillReport(int Matched, List<string> NotFoundInFile, int RowsWithoutScore);
+    /// <param name="Ambiguous">Dòng trong file mẫu không điền vì có nhiều học sinh trùng họ tên (và ngày sinh) nên không xác định được ai.</param>
+    public sealed record FillReport(int Matched, List<string> NotFoundInFile, int RowsWithoutScore, List<string> Ambiguous);
 
-    public static FillReport Fill(RoomService room, string templatePath, string outPath, TemplateInfo info, int scoreCol, int decimals)
+    public static FillReport Fill(ExportData room, string templatePath, string outPath, TemplateInfo info, int scoreCol, int decimals)
     {
         var rows = Rows(room, decimals);
-        var used = new HashSet<Row>();
+        var used = new HashSet<Row>(ReferenceEqualityComparer.Instance);
+        var ambiguous = new List<string>();
+        var ambiguousNames = new HashSet<string>();
         int matched = 0, blank = 0;
         using var wb = new XLWorkbook(templatePath);
         var ws = wb.Worksheet(info.SheetName);
         int last = ws.LastRowUsed()?.RowNumber() ?? info.HeaderRow;
+
+        // Đọc trước toàn bộ dòng học sinh của file mẫu để biết dòng nào trùng họ tên / ngày sinh với dòng khác.
+        var fileRows = new List<(int r, string name, string code, string birth)>();
         for (int r = info.HeaderRow + 1; r <= last; r++)
         {
             var name = Norm(ws.Cell(r, info.NameCol).GetFormattedString());
             if (name.Length == 0) continue;
             var code = info.CodeCol > 0 ? ws.Cell(r, info.CodeCol).GetFormattedString().Trim() : "";
             var birth = info.BirthCol > 0 ? NormDate(ws.Cell(r, info.BirthCol)) : "";
-            Row? hit = null;
-            if (code.Length > 0) hit = rows.FirstOrDefault(x => !used.Contains(x) && string.Equals(x.Sbd.Trim(), code, StringComparison.OrdinalIgnoreCase));
-            hit ??= rows.FirstOrDefault(x => !used.Contains(x) && Norm(x.Name) == name && (birth.Length == 0 || NormDate(x.Birth) == birth));
-            if (hit == null) { blank++; continue; }
-            used.Add(hit);
-            if (hit.Score is double s) { ws.Cell(r, scoreCol).Value = s; matched++; }
+            fileRows.Add((r, name, code, birth));
+        }
+        var hits = new Dictionary<int, Row>();
+
+        // Lượt 1: khớp theo mã học sinh / SBD — chỉ nhận khi mã là duy nhất ở cả hai phía VÀ họ tên cũng trùng
+        // (cột "Mã" của file mẫu có thể là loại mã khác, trùng số với SBD của học sinh khác).
+        foreach (var f in fileRows.Where(f => f.code.Length > 0))
+        {
+            var sameCode = rows.Where(x => string.Equals(x.Sbd.Trim(), f.code, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (sameCode.Count != 1 || used.Contains(sameCode[0]) || Norm(sameCode[0].Name) != f.name) continue;
+            if (fileRows.Count(o => string.Equals(o.code, f.code, StringComparison.OrdinalIgnoreCase)) != 1) continue;
+            hits[f.r] = sameCode[0];
+            used.Add(sameCode[0]);
+        }
+        // Lượt 2: khớp theo họ tên (+ ngày sinh nếu file mẫu có). Chỉ điền khi đúng MỘT thí sinh và đúng MỘT dòng file mẫu
+        // mang cặp họ tên/ngày sinh đó; trùng tên mà không phân biệt được thì để trống và báo lại, không đoán.
+        foreach (var f in fileRows.Where(f => !hits.ContainsKey(f.r)))
+        {
+            bool Same(Row x) => Norm(x.Name) == f.name && (f.birth.Length == 0 || NormDate(x.Birth) == f.birth);
+            var cands = rows.Where(x => !used.Contains(x) && Same(x)).ToList();
+            if (cands.Count == 0) continue;
+            int twins = fileRows.Count(o => !hits.ContainsKey(o.r) && o.name == f.name && (f.birth.Length == 0 || o.birth.Length == 0 || o.birth == f.birth));
+            if (cands.Count > 1 || twins > 1)
+            {
+                ambiguousNames.Add(f.name);
+                ambiguous.Add($"dòng {f.r} · {ws.Cell(f.r, info.NameCol).GetFormattedString().Trim()}" + (f.birth.Length > 0 ? $" · {f.birth}" : ""));
+                continue;
+            }
+            hits[f.r] = cands[0];
+            used.Add(cands[0]);
+        }
+        // Thí sinh thuộc nhóm trùng tên không được coi là "không có trong file mẫu".
+        foreach (var f in fileRows)
+        {
+            if (!hits.TryGetValue(f.r, out var hit)) { blank++; continue; }
+            if (hit.Score is double s) { ws.Cell(f.r, scoreCol).Value = s; matched++; }
             else blank++;
         }
         wb.SaveAs(outPath);
-        var missing = rows.Where(x => !used.Contains(x)).Select(x => $"{x.Sbd} · {x.Name} · {x.Birth}").ToList();
-        return new FillReport(matched, missing, blank);
+        var missing = rows.Where(x => !used.Contains(x) && !ambiguousNames.Contains(Norm(x.Name)))
+                          .Select(x => $"{x.Sbd} · {x.Name} · {x.Birth}").ToList();
+        return new FillReport(matched, missing, blank, ambiguous);
     }
 
     // ---------------- Hộp thoại ----------------
-    public static async void Run(Window owner, RoomService room)
+    public static async void Run(Window owner, RoomService live)
     {
+        // Xuất từ bản dữ liệu riêng chụp tại thời điểm mở hộp thoại, không đọc phòng thi đang chạy từ luồng nền.
+        var room = live.Snapshot();
         var dlg = new Window
         {
             Owner = owner, Title = "Xuất điểm cho phần mềm quản lý trường", Width = 600, SizeToContent = SizeToContent.Height,
@@ -217,7 +277,7 @@ public static class SchoolExport
                 if (save.ShowDialog(owner) != true) return;
                 var p1 = save.FileName;
                 await Busy.Run(owner, "Đang tạo file điểm theo lớp…", () => WriteByClass(room, p1, dec));
-                room.Log("XUẤT FILE", "", $"Đã xuất điểm theo lớp · {System.IO.Path.GetFileName(save.FileName)}");
+                live.Log("XUẤT FILE", "", $"Đã xuất điểm theo lớp · {System.IO.Path.GetFileName(save.FileName)}");
                 MessageBox.Show(owner, "Đã xuất file điểm:\n" + save.FileName, "Xuất điểm", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
@@ -241,13 +301,16 @@ public static class SchoolExport
             if (outDlg.ShowDialog(owner) != true) return;
             var outPath = outDlg.FileName; var scol = col.Value;
             var rep = await Busy.Run(owner, "Đang điền điểm vào file mẫu…", () => Fill(room, tplPath, outPath, info, scol, dec));
-            room.Log("XUẤT FILE", "", $"Đã điền {rep.Matched} điểm vào file mẫu · {System.IO.Path.GetFileName(outDlg.FileName)}");
+            live.Log("XUẤT FILE", "", $"Đã điền {rep.Matched} điểm vào file mẫu · {System.IO.Path.GetFileName(outDlg.FileName)}");
             var msg = $"Đã điền điểm cho {rep.Matched} học sinh vào sheet “{info.SheetName}”.\n";
             if (rep.RowsWithoutScore > 0) msg += $"\n{rep.RowsWithoutScore} dòng trong file mẫu không có điểm (học sinh không thi trong phòng này, chưa nộp hoặc bị huỷ kết quả).";
+            if (rep.Ambiguous.Count > 0)
+                msg += $"\n\n{rep.Ambiguous.Count} dòng KHÔNG điền vì có học sinh trùng họ tên" + (info.BirthCol > 0 ? " và ngày sinh" : " (file mẫu không có cột ngày sinh)")
+                       + " — hãy nhập tay các dòng này:\n• " + string.Join("\n• ", rep.Ambiguous.Take(15)) + (rep.Ambiguous.Count > 15 ? "\n…" : "");
             if (rep.NotFoundInFile.Count > 0)
                 msg += $"\n\n{rep.NotFoundInFile.Count} thí sinh không tìm thấy trong file mẫu — kiểm tra lại họ tên, ngày sinh hoặc mã học sinh:\n• "
                        + string.Join("\n• ", rep.NotFoundInFile.Take(15)) + (rep.NotFoundInFile.Count > 15 ? "\n…" : "");
-            MessageBox.Show(owner, msg, "Xuất điểm", MessageBoxButton.OK, rep.NotFoundInFile.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+            MessageBox.Show(owner, msg, "Xuất điểm", MessageBoxButton.OK, rep.NotFoundInFile.Count > 0 || rep.Ambiguous.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
         catch (Exception ex)
         {

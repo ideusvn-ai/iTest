@@ -24,19 +24,42 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '11.0.x'
 
-      - name: Xác định phiên bản
+      - name: Xác định phiên bản (lấy từ Directory.Build.props)
         id: ver
         shell: pwsh
         run: |
-          $v = "1.0.0"
-          if ("${{ github.ref_type }}" -eq "tag") { $v = "${{ github.ref_name }}".TrimStart('v') }
+          # Số phiên bản chỉ khai báo ở một nơi: <Version> trong Directory.Build.props.
+          [xml]$props = Get-Content Directory.Build.props
+          $v = "$($props.Project.PropertyGroup.Version)".Trim()
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "Không đọc được <Version> hợp lệ trong Directory.Build.props (đọc được: '$v')." }
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $tag = "${{ github.ref_name }}".TrimStart('v')
+            if ($tag -ne $v) { throw "Tag v$tag không khớp phiên bản $v trong Directory.Build.props. Sửa <Version> rồi đẩy lại tag." }
+          }
           "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Phiên bản: $v · .NET SDK $(dotnet --version)"
 
       - name: Kiểm thử tự động phần lõi
         shell: pwsh
-        run: dotnet test tests/iTest.Core.Tests/iTest.Core.Tests.csproj -c Release --logger "trx;LogFileName=ketqua.trx" --logger "console;verbosity=normal"
+        run: |
+          dotnet test tests/iTest.Core.Tests/iTest.Core.Tests.csproj -c Release --results-directory TestResults --logger "trx;LogFileName=core.trx" --logger "console;verbosity=normal"
+          if ($LASTEXITCODE -ne 0) { throw "Kiểm thử phần lõi thất bại." }
+
+      - name: Kiểm thử trên Windows (nhập Word, xuất điểm, gói kết quả)
+        shell: pwsh
+        run: |
+          dotnet test tests/iTest.Windows.Tests/iTest.Windows.Tests.csproj -c Release --results-directory TestResults --logger "trx;LogFileName=windows.trx" --logger "console;verbosity=normal"
+          if ($LASTEXITCODE -ne 0) { throw "Kiểm thử trên Windows thất bại." }
+
+      - name: Lưu báo cáo kiểm thử
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BaoCao-KiemThu
+          path: TestResults/**/*.trx
+          if-no-files-found: warn
 
       - name: Build & publish 3 ứng dụng (self-contained, 1 file)
         shell: pwsh
@@ -44,10 +67,20 @@ jobs:
           $common = @('-c','Release','-r','win-x64','--self-contained','true',
                       '-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true',
                       '-p:EnableCompressionInSingleFile=true',"-p:Version=${{ steps.ver.outputs.version }}")
-          dotnet publish src/iTest.Client/iTest.Client.csproj @common -o publish/iTest
-          dotnet publish src/iTest.Server/iTest.Server.csproj @common -o publish/iTest-Server
-          dotnet publish src/iTest.Editor/iTest.Editor.csproj @common -o publish/iTest-Editor
-          dotnet publish tools/iTest.LoadTest/iTest.LoadTest.csproj @common -o publish/LoadTest
+          $apps = [ordered]@{
+            'src/iTest.Client/iTest.Client.csproj'     = @('publish/iTest',        'iTest.exe')
+            'src/iTest.Server/iTest.Server.csproj'     = @('publish/iTest-Server', 'iTest-Server.exe')
+            'src/iTest.Editor/iTest.Editor.csproj'     = @('publish/iTest-Editor', 'iTest-Editor.exe')
+            'tools/iTest.LoadTest/iTest.LoadTest.csproj' = @('publish/LoadTest',   'iTest-LoadTest.exe')
+          }
+          # Kiểm tra lỗi sau TỪNG lệnh publish (PowerShell chỉ tự dừng theo lệnh cuối cùng) và kiểm tra file .exe thực sự được tạo.
+          foreach ($proj in $apps.Keys) {
+            $out = $apps[$proj][0]; $exe = Join-Path $out $apps[$proj][1]
+            dotnet publish $proj @common -o $out
+            if ($LASTEXITCODE -ne 0) { throw "dotnet publish lỗi với $proj (mã $LASTEXITCODE)." }
+            if (-not (Test-Path $exe)) { throw "Không thấy $exe sau khi publish $proj." }
+            Write-Host ("{0}: {1:N1} MB" -f $exe, ((Get-Item $exe).Length / 1MB))
+          }
 
       - name: Ký số các file .exe ứng dụng (khi có chứng thư số)
         if: env.CODESIGN_PFX_BASE64 != ''
@@ -70,7 +103,9 @@ jobs:
             & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" "installer\$f.iss"
             if ($LASTEXITCODE -ne 0) { throw "ISCC lỗi với $f" }
           }
-          Get-ChildItem dist
+          $made = @(Get-ChildItem dist -Filter *.exe)
+          if ($made.Count -ne 3) { throw "Cần 3 bộ cài trong dist, chỉ thấy $($made.Count)." }
+          $made | Format-Table Name, Length
 
       - name: Ký số các bộ cài (khi có chứng thư số)
         if: env.CODESIGN_PFX_BASE64 != ''
@@ -82,7 +117,9 @@ jobs:
 
       - name: Đóng gói công cụ thử tải
         shell: pwsh
-        run: Compress-Archive -Path publish/LoadTest/iTest-LoadTest.exe -DestinationPath dist/iTest-LoadTest.zip -Force
+        run: |
+          Compress-Archive -Path publish/LoadTest/iTest-LoadTest.exe -DestinationPath dist/iTest-LoadTest.zip -Force
+          if (-not (Test-Path dist/iTest-LoadTest.zip)) { throw "Không tạo được dist/iTest-LoadTest.zip." }
 
       - uses: actions/upload-artifact@v4
         with:

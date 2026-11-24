@@ -14,6 +14,92 @@ public class PackageTests
         }
     };
 
+    private static Dictionary<string, byte[]> Media() => new() { ["img1.png"] = new byte[] { 1, 2, 3, 4, 5 } };
+
+    private static void Throws(Action<ExamSet, Dictionary<string, byte[]>> change, string expected)
+    {
+        var x = Exam(); var m = Media();
+        change(x, m);
+        var ex = Assert.Throws<InvalidDataException>(() => ExamPackage.Validate(x, m));
+        Assert.Contains(expected, ex.Message);
+    }
+
+    [Fact]
+    public void Validate_accepts_a_good_exam_and_rejects_broken_structure()
+    {
+        ExamPackage.Validate(Exam(), Media());
+        Throws((x, _) => x.Questions.Clear(), "không có câu hỏi");
+        Throws((x, _) => x.Questions[1].Id = 1, "mã câu trùng");
+        Throws((x, _) => x.Questions[0].Id = 0, "mã câu trùng hoặc không hợp lệ");
+        Throws((x, _) => x.Questions[0].Points = double.NaN, "điểm không hợp lệ");
+        Throws((x, _) => x.Questions[0].Points = -1, "điểm không hợp lệ");
+        Throws((x, _) => x.Questions[0].Correct = 4, "đáp án ngoài phạm vi");
+        Throws((x, _) => x.Questions[0].Options = new() { "chỉ một" }, "ít nhất 2 phương án");
+        Throws((x, _) => x.Questions[1].TfKey = new() { true }, "không khớp số ý");
+        Throws((x, _) => x.Minutes = 0, "thời gian");
+        Throws((x, _) => x.Codes = 99, "số mã đề");
+        Throws((x, m) => m.Remove("img1.png"), "ảnh không có trong bộ đề");
+        Throws((x, m) => m["..\\evil.png"] = new byte[] { 1 }, "tên file");
+        Throws((x, m) => m["sub/dir.png"] = new byte[] { 1 }, "tên file");
+        Throws((x, m) => m["run.exe"] = new byte[] { 1 }, "tên file");
+        Throws((x, m) => m["empty.png"] = Array.Empty<byte>(), "rỗng");
+        Throws((x, m) => m["big.mp3"] = new byte[ExamPackage.MaxMediaFileBytes + 1], "lớn hơn");
+    }
+
+    [Fact]
+    public void Validate_repairs_missing_lists_from_json()
+    {
+        var x = Exam();
+        x.Questions.Add(new Question { Id = 3, Type = QuestionType.Essay, Text = "TL", Points = 0, Options = null!, Corrects = null!, TfKey = null!, Guide = null! });
+        ExamPackage.Validate(x, Media());
+        Assert.NotNull(x.Questions[2].Options);
+        Assert.NotNull(x.Questions[2].Corrects);
+    }
+
+    [Fact]
+    public void Save_refuses_an_invalid_exam_and_keeps_the_existing_file()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".itz");
+        try
+        {
+            ExamPackage.Save(path, Exam(), Media(), null);
+            var before = File.ReadAllBytes(path);
+            var bad = Exam(); bad.Questions[1].Id = 1;
+            Assert.Throws<InvalidDataException>(() => ExamPackage.Save(path, bad, Media(), null));
+            Assert.Equal(before, File.ReadAllBytes(path));
+            Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(path)!, Path.GetFileName(path) + ".*.tmp"));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Fingerprint_tells_apart_exams_with_the_same_shape()
+    {
+        var a = Exam(); var b = Exam();
+        Assert.Equal(ExamPackage.Fingerprint(a, Media()), ExamPackage.Fingerprint(b, Media()));
+        b.CreatedAt = a.CreatedAt.AddDays(3);                         // đóng gói lại cùng nội dung: dấu không đổi
+        Assert.Equal(ExamPackage.Fingerprint(a, Media()), ExamPackage.Fingerprint(b, Media()));
+        b.Questions[0].Options[3] = "5";                              // cùng số câu, khác một phương án
+        Assert.NotEqual(ExamPackage.Fingerprint(a, Media()), ExamPackage.Fingerprint(b, Media()));
+        var c = Exam(); c.Questions[0].Correct = 1;                   // khác đáp án
+        Assert.NotEqual(ExamPackage.Fingerprint(a, Media()), ExamPackage.Fingerprint(c, Media()));
+        var m2 = Media(); m2["img1.png"] = new byte[] { 9, 9, 9 };    // khác ảnh
+        Assert.NotEqual(ExamPackage.Fingerprint(a, Media()), ExamPackage.Fingerprint(a, m2));
+        Assert.Equal(64, ExamPackage.Fingerprint(a, Media()).Length);
+    }
+
+    [Fact]
+    public void Loaded_package_carries_the_same_fingerprint()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".itz");
+        try
+        {
+            ExamPackage.Save(path, Exam(), Media(), null);
+            Assert.Equal(ExamPackage.Fingerprint(Exam(), Media()), ExamPackage.Load(path, null).Fingerprint);
+        }
+        finally { File.Delete(path); }
+    }
+
     [Fact]
     public void Roundtrip_with_password()
     {
@@ -38,7 +124,7 @@ public class PackageTests
         var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".itz");
         try
         {
-            ExamPackage.Save(path, Exam(), new Dictionary<string, byte[]>(), "abc123");
+            ExamPackage.Save(path, Exam(), Media(), "abc123");
             Assert.ThrowsAny<CryptographicException>(() => ExamPackage.Load(path, "sai"));
             var bytes = File.ReadAllBytes(path);
             bytes[^5] ^= 0xFF;
@@ -54,7 +140,7 @@ public class PackageTests
         var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".itz");
         try
         {
-            ExamPackage.Save(path, Exam(), new Dictionary<string, byte[]>(), null);
+            ExamPackage.Save(path, Exam(), Media(), null);
             Assert.False(ExamPackage.IsPasswordProtected(path));
             Assert.Equal(2, ExamPackage.Load(path, null).Exam.Questions.Count);
         }

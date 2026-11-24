@@ -21,10 +21,12 @@ public sealed class Draft
 
     private readonly object _writeLock = new();
     private bool _deleted;
+    private long _seq, _written;
 
     /// <summary>
     /// Lưu bản nháp. Mặc định dựng JSON ngay (ảnh chụp nội dung) rồi ghi đĩa ở luồng nền để không giật khi gõ;
     /// đặt <paramref name="sync"/>=true khi cần ghi xong ngay (lúc thoát).
+    /// Mỗi lần lưu có số thứ tự: bản cũ đến muộn không ghi đè bản mới; file được ghi qua file tạm rồi mới thay file chính.
     /// </summary>
     public void Save(bool sync = false)
     {
@@ -33,13 +35,15 @@ public sealed class Draft
         var copy = new Draft { Id = Id, Exam = Exam, Locked = Locked, SavedAt = SavedAt, Password = Protect(Password) };
         var json = JsonSerializer.Serialize(copy, Json);
         var folder = Folder;
+        long seq = Interlocked.Increment(ref _seq);
         void Write()
         {
             lock (_writeLock)
             {
-                if (_deleted) return;   // bản nháp đã bị xoá trong lúc chờ ghi: không tạo lại thư mục
-                Directory.CreateDirectory(folder);
-                File.WriteAllText(Path.Combine(folder, "draft.json"), json);
+                if (_deleted) return;        // bản nháp đã bị xoá trong lúc chờ ghi: không tạo lại thư mục
+                if (seq < _written) return;  // đã có bản mới hơn trên đĩa
+                SafeFile.WriteAllText(Path.Combine(folder, "draft.json"), json);
+                _written = seq;
             }
         }
         if (sync) Write(); else Task.Run(() => { try { Write(); } catch { } });

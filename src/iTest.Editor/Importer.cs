@@ -40,7 +40,12 @@ public sealed class ImportedQuestion
 /// </summary>
 public static class Importer
 {
-    private static readonly Regex QStart = new(@"^\s*Câu\s*(\d+)\s*[\.:\)]?\s*(.*)$", RegexOptions.IgnoreCase);
+    // Singleline: nội dung câu có thể có ngắt dòng mềm (Shift+Enter) bên trong đoạn.
+    private static readonly Regex QStart = new(@"^\s*Câu\s*(\d+)\s*[\.:\)]?\s*(.*)$", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+    // Phần ghi điểm sau số câu: "(0,5 điểm)", "(0.5đ)", có thể kèm dấu chấm hoặc hai chấm phía sau: "Câu 1 (0,5 điểm). Nội dung".
+    // Dòng không thuộc nội dung câu hỏi: "--- HẾT ---", tiêu đề phần, dòng đáp án / lời giải ở cuối đề.
+    private static readonly Regex NotContent = new(@"^[\s\-–—_\*\.]*(HẾT[\s\-–—_\*\.]*$|PHẦN\s|ĐÁP ÁN|HƯỚNG DẪN|LỜI GIẢI|GHI CHÚ)", RegexOptions.IgnoreCase);
+    private static readonly Regex PointsNote = new(@"^\(\s*(\d+(?:[\.,]\d+)?)\s*(?:điểm|đ)\s*\)\s*[\.:]?\s*", RegexOptions.IgnoreCase);
     private static readonly Regex OptSplit = new(@"(?<![A-Za-zÀ-ỹ])\*?([A-D])\s*[\.\)]\s*", RegexOptions.Compiled);
     // Các ý của câu Đúng/Sai: chữ thường a) b) c) d) (bắt buộc dấu ngoặc để không nhầm với chữ trong câu).
     private static readonly Regex StmtSplit = new(@"(?<![A-Za-zÀ-ỹ0-9])\*?([a-d])\s*\)\s*", RegexOptions.Compiled);
@@ -67,19 +72,49 @@ public static class Importer
                 var col = rp?.Color?.Val?.Value ?? "";
                 bool red = col.Equals("FF0000", StringComparison.OrdinalIgnoreCase) || col.Equals("C00000", StringComparison.OrdinalIgnoreCase) || col.Equals("EE0000", StringComparison.OrdinalIgnoreCase);
                 bool m = underlined || red;
-                foreach (var t in run.Elements<W.Text>()) { sb.Append(t.Text); for (int i = 0; i < t.Text.Length; i++) marked.Add(m); }
-                foreach (var _ in run.Elements<W.TabChar>()) { sb.Append('\t'); marked.Add(false); }
+                // Đi qua các phần tử của run theo đúng thứ tự trong văn bản; ngắt dòng mềm (Shift+Enter) được giữ là xuống dòng.
+                foreach (var child in run.ChildElements)
+                {
+                    switch (child)
+                    {
+                        case W.Text tx:
+                            sb.Append(tx.Text);
+                            for (int i = 0; i < tx.Text.Length; i++) marked.Add(m);
+                            break;
+                        case W.TabChar:
+                            sb.Append('\t'); marked.Add(false);
+                            break;
+                        case W.Break br when br.Type == null || br.Type.InnerText == "textWrapping":
+                        case W.CarriageReturn:
+                            sb.Append('\n'); marked.Add(false);
+                            break;
+                    }
+                }
             }
             var text = sb.ToString();
-            var blip = p.Descendants<A.Blip>().FirstOrDefault();
-            if (blip?.Embed?.Value is string rid && cur != null && main.GetPartById(rid) is ImagePart ip)
+            // Ảnh trong đoạn: đọc trước, gán sau khi biết đoạn này có mở đầu một câu mới hay không.
+            byte[]? img = null; string imgExt = ".png";
+            try
             {
-                using var s = ip.GetStream();
-                using var ms = new MemoryStream();
-                s.CopyTo(ms);
-                cur.Image = ms.ToArray();
-                cur.ImageExt = ip.ContentType.Contains("jpeg") ? ".jpg" : ".png";
+                var blip = p.Descendants<A.Blip>().FirstOrDefault();
+                if (blip?.Embed?.Value is string rid && main.GetPartById(rid) is ImagePart ip)
+                {
+                    var ct = ip.ContentType.ToLowerInvariant();
+                    string? ext = ct.Contains("png") ? ".png" : ct.Contains("jpeg") || ct.Contains("jpg") ? ".jpg" : ct.Contains("gif") ? ".gif" : ct.Contains("bmp") ? ".bmp" : null;
+                    if (ext != null)   // ảnh vector của Word (emf/wmf) không hiển thị được trên máy thí sinh: bỏ qua
+                    {
+                        using var s = ip.GetStream();
+                        using var ms = new MemoryStream();
+                        s.CopyTo(ms);
+                        img = ms.ToArray(); imgExt = ext;
+                    }
+                }
             }
+            catch { }
+            bool startsQuestion = !string.IsNullOrWhiteSpace(text) && QStart.IsMatch(text);
+            // Ảnh nằm trong đoạn KHÔNG mở đầu câu mới thuộc về câu đang đọc. Ảnh nằm ngay trong đoạn "Câu n…" thuộc về câu mới đó
+            // (trước đây bị gán nhầm sang câu trước).
+            if (img != null && !startsQuestion && cur != null && cur.Image == null) { cur.Image = img; cur.ImageExt = imgExt; img = null; }
             if (string.IsNullOrWhiteSpace(text)) continue;
             var upper = text.Trim().ToUpperInvariant();
             if (upper.Contains("TỰ LUẬN") && !QStart.IsMatch(text)) { essay = true; continue; }
@@ -90,8 +125,9 @@ public static class Importer
             {
                 cur = new ImportedQuestion { Type = essay ? QuestionType.Essay : QuestionType.MultipleChoice };
                 list.Add(cur);
+                if (img != null) { cur.Image = img; cur.ImageExt = imgExt; }
                 var rest = qm.Groups[2].Value;
-                var pts = Regex.Match(rest, @"^\(\s*([\d,\.]+)\s*điểm\s*\)\s*", RegexOptions.IgnoreCase);
+                var pts = PointsNote.Match(rest);
                 if (pts.Success)
                 {
                     if (double.TryParse(pts.Groups[1].Value.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var pv)) cur.Points = pv;
@@ -111,6 +147,12 @@ public static class Importer
             }
             else if (cur.Options.Count == 0)
                 cur.Text = (cur.Text + "\n" + text.Trim()).Trim();
+            else if (!NotContent.IsMatch(text))
+            {
+                // Phương án viết tiếp ở đoạn sau (xuống dòng): nối vào phương án cuối thay vì bỏ mất.
+                int lastOpt = cur.Options.Count - 1;
+                cur.Options[lastOpt] = (cur.Options[lastOpt] + "\n" + text.Trim()).Trim();
+            }
         }
         foreach (var q in list) Classify(q);
         return list;

@@ -158,21 +158,35 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(FSubject.Text)) miss.Add("môn thi");
         if (string.IsNullOrWhiteSpace(FAuthor.Text)) miss.Add("người soạn đề");
         if (string.IsNullOrWhiteSpace(FYear.Text)) miss.Add("năm học");
-        if (Int(FMinutes.Text) <= 0) miss.Add("thời gian");
-        if (Int(FCodes.Text) <= 0) miss.Add("số mã đề");
-        if (Int(FNMc.Text) + Int(FNEs.Text) <= 0) miss.Add("số câu");
         if (miss.Count > 0) { FError.Text = "Vui lòng nhập: " + string.Join(", ", miss) + "."; return; }
+        // Kiểm tra số liệu: chỉ nhận số nguyên trong phạm vi hợp lý (không nhận số âm, số quá lớn hay chữ lẫn số).
+        static bool Whole(string s, out int v) => int.TryParse(s.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out v);
+        static bool Score(string s, out double v) =>
+            double.TryParse(s.Trim().Replace(',', '.'), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out v) && !double.IsNaN(v) && !double.IsInfinity(v);
+        if (!Whole(FMinutes.Text, out var minutes) || minutes < 1 || minutes > ExamPackage.MaxMinutes)
+        { FError.Text = $"Thời gian làm bài phải là số nguyên từ 1 đến {ExamPackage.MaxMinutes} phút."; return; }
+        if (!Whole(FCodes.Text, out var codes) || codes < 1 || codes > ExamPackage.MaxCodes)
+        { FError.Text = $"Số mã đề phải là số nguyên từ 1 đến {ExamPackage.MaxCodes}."; return; }
+        if (!Whole(FNMc.Text.Trim().Length == 0 ? "0" : FNMc.Text, out var cMc) || !Whole(FNEs.Text.Trim().Length == 0 ? "0" : FNEs.Text, out var cEs))
+        { FError.Text = "Số câu trắc nghiệm và số câu tự luận phải là số nguyên không âm."; return; }
+        if (cMc + cEs < 1 || cMc + cEs > ExamPackage.MaxQuestions)
+        { FError.Text = $"Tổng số câu phải từ 1 đến {ExamPackage.MaxQuestions}."; return; }
+        double sMc = 0, sEs = 0;
+        if (cMc > 0 && (!Score(FPMc.Text, out sMc) || sMc <= 0)) { FError.Text = "Tổng điểm phần trắc nghiệm phải là số lớn hơn 0."; return; }
+        if (cEs > 0 && (!Score(FPEs.Text, out sEs) || sEs <= 0)) { FError.Text = "Tổng điểm phần tự luận phải là số lớn hơn 0."; return; }
+        if (Math.Abs(sMc + sEs - 10) > 0.001)
+        { FError.Text = $"Tổng điểm cả đề phải bằng 10 (đang là {F(sMc + sEs)}). Hãy chỉnh tổng điểm từng phần."; return; }
+        if (Math.Round(sMc * 100) < cMc || Math.Round(sEs * 100) < cEs)
+        { FError.Text = "Số câu quá nhiều so với tổng điểm của phần (mỗi câu phải được ít nhất 0,01 điểm)."; return; }
         if (FPass.Password.Length > 0 && FPass.Password != FPass2.Password) { FError.Text = "Mật khẩu xác nhận không khớp."; return; }
         FError.Text = "";
 
         var d = _editingMeta && _draft != null ? _draft : new Draft();
         var x = d.Exam;
         x.ExamName = FExam.Text.Trim(); x.Subject = FSubject.Text.Trim(); x.Author = FAuthor.Text.Trim(); x.Unit = FUnit.Text.Trim();
-        x.SchoolYear = FYear.Text.Trim(); x.AllowDocuments = FDocs.SelectedIndex == 1; x.Minutes = Int(FMinutes.Text); x.Codes = Int(FCodes.Text);
-        int nMc = Int(FNMc.Text), nEs = Int(FNEs.Text);
-        double tMc = nMc > 0 ? Num(FPMc.Text) : 0, tEs = nEs > 0 ? Num(FPEs.Text) : 0;
-        if (nMc > 0 && tMc <= 0) { FError.Text = "Vui lòng nhập tổng điểm phần trắc nghiệm."; return; }
-        if (nEs > 0 && tEs <= 0) { FError.Text = "Vui lòng nhập tổng điểm phần tự luận."; return; }
+        x.SchoolYear = FYear.Text.Trim(); x.AllowDocuments = FDocs.SelectedIndex == 1; x.Minutes = minutes; x.Codes = codes;
+        int nMc = cMc, nEs = cEs;
+        double tMc = sMc, tEs = sEs;
         if (_editingMeta && _draft != null)
         {
             x.EnsureTotals();
@@ -357,8 +371,13 @@ public partial class MainWindow : Window
         _optBoxes.Clear();
         if (!q.Type.HasOptions()) return;
         if (q.Type == QuestionType.YesNo) { BuildYesNo(q); return; }
-        while (q.Options.Count < 4) q.Options.Add("");
-        if (q.Type == QuestionType.TrueFalse) while (q.TfKey.Count < q.Options.Count) q.TfKey.Add(null);
+        // Câu có 2 hoặc 3 phương án được giữ nguyên (không tự thêm cho đủ 4 rồi báo thiếu phương án).
+        while (q.Options.Count < 2) q.Options.Add("");
+        if (q.Type == QuestionType.TrueFalse)
+        {
+            while (q.TfKey.Count < q.Options.Count) q.TfKey.Add(null);
+            if (q.TfKey.Count > q.Options.Count) q.TfKey.RemoveRange(q.Options.Count, q.TfKey.Count - q.Options.Count);
+        }
         EOptTitle.Text = q.Type switch
         {
             QuestionType.MultiSelect => "Phương án · đánh dấu tất cả đáp án đúng",
@@ -410,6 +429,40 @@ public partial class MainWindow : Window
             panel.Children.Add(row);
             _optBoxes.Add(tb);
         }
+        // Thêm / bớt phương án (2 đến 4): bớt luôn là phương án cuối.
+        var tools = new StackPanel { Orientation = Orientation.Horizontal };
+        string noun = q.Type == QuestionType.TrueFalse ? "ý" : "phương án";
+        if (q.Options.Count < 4)
+        {
+            var add = new Button { Content = "＋ Thêm " + noun, Style = (Style)FindResource("BtnGhost"), MinHeight = 30, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(0, 0, 8, 0), IsTabStop = false };
+            add.Click += (_, _) =>
+            {
+                if (Cur == null || Cur.Options.Count >= 4) return;
+                Cur.Options.Add("");
+                if (Cur.Type == QuestionType.TrueFalse) Cur.TfKey.Add(null);
+                BuildOptionEditors(Cur);
+                Changed();
+            };
+            tools.Children.Add(add);
+        }
+        if (q.Options.Count > 2)
+        {
+            var del = new Button { Content = $"− Bớt {noun} cuối", Style = (Style)FindResource("BtnGhost"), MinHeight = 30, Padding = new Thickness(10, 0, 10, 0), IsTabStop = false,
+                                   ToolTip = "Dùng cho câu chỉ có 2 hoặc 3 phương án" };
+            del.Click += (_, _) =>
+            {
+                if (Cur == null || Cur.Options.Count <= 2) return;
+                int lastIdx = Cur.Options.Count - 1;
+                Cur.Options.RemoveAt(lastIdx);
+                if (Cur.Correct == lastIdx) Cur.Correct = -1;
+                Cur.Corrects.Remove(lastIdx);
+                if (Cur.TfKey.Count > lastIdx) Cur.TfKey.RemoveRange(lastIdx, Cur.TfKey.Count - lastIdx);
+                BuildOptionEditors(Cur);
+                Changed();
+            };
+            tools.Children.Add(del);
+        }
+        panel.Children.Add(tools);
         EOptions.Items.Add(panel);
     }
 
@@ -512,7 +565,7 @@ public partial class MainWindow : Window
     {
         if (_loading || Cur == null || EType.SelectedItem is not ComboBoxItem { Tag: QuestionType ty } || ty == Cur.Type) return;
         Cur.Type = ty;
-        if (ty == QuestionType.TrueFalse && Cur.TfKey.Count == 0) Cur.TfKey = new List<bool?> { null, null, null, null };
+        if (ty == QuestionType.TrueFalse && Cur.TfKey.Count == 0) Cur.TfKey = Cur.Options.Select(_ => (bool?)null).ToList();
         if (ty == QuestionType.YesNo) { Cur.Options = QuestionTypes.YesNoOptions.ToList(); if (Cur.Correct > 1) Cur.Correct = -1; }
         else if (Cur.Options.SequenceEqual(QuestionTypes.YesNoOptions)) { Cur.Options = new List<string> { "", "", "", "" }; Cur.Correct = -1; }
         LoadCurrent();
@@ -588,7 +641,7 @@ public partial class MainWindow : Window
         RefreshSide();
         UpdateListButtons();
         SaveText.Text = "Đang lưu bản nháp…";
-        _saveTimer.Stop(); _saveTimer.Start();
+        ScheduleSave();
     }
 
     private void AddQuestion_Click(object sender, RoutedEventArgs e)
@@ -700,6 +753,19 @@ public partial class MainWindow : Window
     private void EGuide_Changed(object sender, TextChangedEventArgs e) { if (_loading || Cur == null) return; Cur.Guide = EGuide.Text; Changed(); }
     private void EPoints_Changed(object sender, TextChangedEventArgs e) { if (_loading || Cur == null) return; Cur.Points = Num(EPoints.Text); Changed(); }
 
+    /// <summary>
+    /// Hẹn lưu bản nháp sau khi ngừng gõ 0,8 giây; nhưng nếu gõ liên tục thì vẫn lưu ít nhất 5 giây một lần
+    /// (trước đây mỗi phím gõ lại hoãn việc lưu, gõ liên tục thì không bao giờ lưu).
+    /// </summary>
+    private void ScheduleSave()
+    {
+        if (_dirtySince == DateTime.MinValue) _dirtySince = DateTime.Now;
+        _saveTimer.Stop();
+        if ((DateTime.Now - _dirtySince).TotalSeconds >= 5) SaveNow();
+        else _saveTimer.Start();
+    }
+    private DateTime _dirtySince = DateTime.MinValue;
+
     private void Changed()
     {
         _packed = false;
@@ -708,7 +774,7 @@ public partial class MainWindow : Window
         UpdatePreview();
         ScheduleSide();
         SaveText.Text = "Đang lưu bản nháp…";
-        _saveTimer.Stop(); _saveTimer.Start();
+        ScheduleSave();
     }
 
     // ===================== Phiên làm việc =====================
@@ -762,6 +828,7 @@ public partial class MainWindow : Window
 
     private void SaveNow()
     {
+        _dirtySince = DateTime.MinValue;
         if (_draft == null) return;
         try
         {
@@ -882,10 +949,25 @@ public partial class MainWindow : Window
             if (it.Type.HasOptions())
             {
                 slot.Options = it.Options.Take(4).ToList();
-                while (it.Type != QuestionType.YesNo && slot.Options.Count < 4) slot.Options.Add("");
                 slot.Correct = it.Correct;
                 slot.Corrects = it.Corrects.ToList();
                 slot.TfKey = it.TfKey.ToList();
+                if (it.Type != QuestionType.YesNo)
+                {
+                    // Giữ đúng số phương án của câu gốc (2, 3 hoặc 4): chỉ bỏ các ô trống ở cuối (file Excel luôn có đủ 4 cột),
+                    // không tự thêm cho đủ bốn.
+                    while (slot.Options.Count > 2 && string.IsNullOrWhiteSpace(slot.Options[^1]) && slot.Correct != slot.Options.Count - 1
+                           && !slot.Corrects.Contains(slot.Options.Count - 1))
+                        slot.Options.RemoveAt(slot.Options.Count - 1);
+                    while (slot.Options.Count < 2) slot.Options.Add("");
+                    if (slot.Correct >= slot.Options.Count) slot.Correct = -1;
+                    slot.Corrects.RemoveAll(i => i < 0 || i >= slot.Options.Count);
+                    if (it.Type == QuestionType.TrueFalse)
+                    {
+                        if (slot.TfKey.Count > slot.Options.Count) slot.TfKey.RemoveRange(slot.Options.Count, slot.TfKey.Count - slot.Options.Count);
+                        while (slot.TfKey.Count < slot.Options.Count) slot.TfKey.Add(null);
+                    }
+                }
             }
             if (it.Type == QuestionType.ShortAnswer) slot.ShortKey = it.ShortKey;
             if (it.Type == QuestionType.Essay && it.ShortKey.Length > 0) slot.Guide = it.ShortKey;

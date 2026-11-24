@@ -50,28 +50,46 @@ public static class Exporter
         }
     }
 
-    public static void ExportZip(RoomService room, string zipPath, Formulas? formulas = null)
+    /// <summary>
+    /// Đóng gói kết quả từ bản dữ liệu riêng <paramref name="room"/> (xem <see cref="RoomService.Snapshot"/>).
+    /// File ZIP mới được tạo xong hoàn toàn ở tên tạm rồi mới thay file cũ: xuất lỗi giữa chừng không làm mất gói kết quả đã có.
+    /// </summary>
+    public static void ExportZip(ExportData room, string zipPath, Formulas? formulas = null)
     {
         var tmp = Path.Combine(Path.GetTempPath(), "itest_export_" + Guid.NewGuid().ToString("N"));
+        var newZip = zipPath + "." + Guid.NewGuid().ToString("N")[..8] + ".tmp";
         Directory.CreateDirectory(tmp);
         try
         {
-            var cands = room.Candidates.Where(c => c.Sbd.Length > 0).OrderBy(c => c.Sbd).ToList();
+            var cands = room.Candidates.Where(c => c.Sbd.Length > 0).OrderBy(c => c.Sbd, StringComparer.OrdinalIgnoreCase).ToList();
             var phach = cands.Select((c, i) => (c, code: $"P{i + 1:000}")).ToList();
             WriteExcel(room, cands, phach, Path.Combine(tmp, "BangDiem_PhanTichDe.xlsx"));
             WriteEssaysPdf(room, phach, Path.Combine(tmp, "BaiTuLuan_DanhPhach.pdf"), formulas);
             WriteReportPdf(room, cands, Path.Combine(tmp, "BienBanPhongThi.pdf"));
             File.WriteAllText(Path.Combine(tmp, "BaiLam.json"),
                 JsonSerializer.Serialize(cands.Select(c => c.Sheet), new JsonSerializerOptions { WriteIndented = true }));
-            var log = Path.Combine(room.BackupDir, "nhat-ky.txt");
-            if (File.Exists(log)) File.Copy(log, Path.Combine(tmp, "NhatKy.txt"));
-            if (File.Exists(zipPath)) File.Delete(zipPath);
-            ZipFile.CreateFromDirectory(tmp, zipPath);
+            CopyLog(Path.Combine(room.BackupDir, "nhat-ky.txt"), Path.Combine(tmp, "NhatKy.txt"));
+            ZipFile.CreateFromDirectory(tmp, newZip);
+            File.Move(newZip, zipPath, overwrite: true);
         }
         finally
         {
             try { Directory.Delete(tmp, true); } catch { }
+            try { if (File.Exists(newZip)) File.Delete(newZip); } catch { }
         }
+    }
+
+    /// <summary>Chép nhật ký trong lúc máy chủ có thể vẫn đang ghi thêm vào file đó.</summary>
+    private static void CopyLog(string from, string to)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(from) || !File.Exists(from)) return;
+            using var src = new FileStream(from, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var dst = File.Create(to);
+            src.CopyTo(dst);
+        }
+        catch { }
     }
 
     /// <summary>Nhận xét ngắn cho một câu trong bảng phân tích đề.</summary>
@@ -119,7 +137,7 @@ public static class Exporter
 
     private static string F(double v) => Math.Round(v, 2).ToString("0.##", System.Globalization.CultureInfo.GetCultureInfo("vi-VN"));
 
-    private static void WriteExcel(RoomService room, List<Candidate> cands, List<(Candidate c, string code)> phach, string path)
+    private static void WriteExcel(ExportData room, List<ExportCand> cands, List<(ExportCand c, string code)> phach, string path)
     {
         var exam = room.Exam;
         using var wb = new XLWorkbook();
@@ -142,10 +160,15 @@ public static class Exporter
             ws.Cell(r, 5).Value = c.ClassName;
             ws.Cell(r, 6).Value = c.Machine;
             ws.Cell(r, 7).Value = c.Code;
-            ws.Cell(r, 8).Value = g.Right;
-            ws.Cell(r, 9).Value = g.Wrong;
-            ws.Cell(r, 10).Value = g.Blank;
-            if (c.Sheet.Revoked) ws.Cell(r, 11).Value = "Huỷ"; else ws.Cell(r, 11).Value = g.Score;
+            // Chỉ bài đã nộp và không bị huỷ mới có điểm; bài chưa nộp để trống (không ghi điểm 0 gây hiểu nhầm).
+            if (c.HasScore && layout != null)
+            {
+                ws.Cell(r, 8).Value = g.Right;
+                ws.Cell(r, 9).Value = g.Wrong;
+                ws.Cell(r, 10).Value = g.Blank;
+                ws.Cell(r, 11).Value = g.Score;
+            }
+            else ws.Cell(r, 11).Value = c.Sheet.Revoked ? "Huỷ" : "Chưa nộp";
             ws.Cell(r, 12).Value = c.StatusText;
             ws.Cell(r, 13).Value = c.Discipline == "—" ? "" : c.Discipline;
             r++;
@@ -163,7 +186,7 @@ public static class Exporter
         string[] ah = { "Câu (gốc)", "Loại câu", "Nội dung", "Số lượt trả lời", "Tỉ lệ đúng", "Đáp án", "A / ý a", "B / ý b", "C / ý c", "D / ý d", "Nhận xét" };
         for (int i = 0; i < ah.Length; i++) wa.Cell(1, i + 1).Value = ah[i];
         wa.Range(1, 1, 1, ah.Length).Style.Font.SetBold().Fill.SetBackgroundColor(XLColor.FromHtml("#DBEAFE"));
-        var stats = Scoring.Analyze(exam, room.Layouts, cands.Select(c => c.Sheet)).OrderBy(s => s.CorrectRate).ToList();
+        var stats = Scoring.Analyze(exam, room.Layouts, cands.Where(c => c.HasScore).Select(c => c.Sheet)).OrderBy(s => s.CorrectRate).ToList();
         var byId = exam.Questions.ToDictionary(q => q.Id);
         int ar = 2;
         foreach (var s in stats)
@@ -190,7 +213,7 @@ public static class Exporter
         wb.SaveAs(path);
     }
 
-    private static void WriteEssaysPdf(RoomService room, List<(Candidate c, string code)> phach, string path, Formulas? formulas)
+    private static void WriteEssaysPdf(ExportData room, List<(ExportCand c, string code)> phach, string path, Formulas? formulas)
     {
         var exam = room.Exam;
         var essays = exam.EssayQuestions.ToList();
@@ -236,7 +259,7 @@ public static class Exporter
         }).GeneratePdf(path);
     }
 
-    private static void WriteReportPdf(RoomService room, List<Candidate> cands, string path)
+    private static void WriteReportPdf(ExportData room, List<ExportCand> cands, string path)
     {
         var exam = room.Exam;
         var violations = cands.Where(c => c.WarnedAt != null || c.RevokedAt != null).ToList();

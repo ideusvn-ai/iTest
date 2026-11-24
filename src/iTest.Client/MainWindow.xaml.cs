@@ -30,6 +30,11 @@ public partial class MainWindow : Window
     private bool _paused;
     private bool _examRunning;
     private bool _submitted;
+    private bool _confirmed;           // máy chủ đã xác nhận lưu bài (tin Result)
+    private bool _autoSubmit;          // lần nộp gần nhất là tự động (hết giờ / bị thu bài)
+    private bool _resumePending;       // mở lại ứng dụng khi bài đã nộp nhưng chưa được máy chủ xác nhận
+    private SavedSession? _saved;      // phiên làm bài còn dở đọc được lúc mở ứng dụng
+    private readonly OrderedWriter _writer = new();
     private bool _released;
     private bool _registered;
     private string _sessionToken = "";
@@ -67,6 +72,25 @@ public partial class MainWindow : Window
     private readonly HashSet<int> _dirtyEssays = new();
     private DateTime _submittedAt;
     private readonly string _localSave = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "iTest", "autosave.json");
+    private readonly string _sessionFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "iTest", "session.json");
+
+    /// <summary>
+    /// Thông tin phiên lưu trên máy để sau khi máy khởi động lại (mất điện, treo máy) thí sinh vào lại đúng phiên của mình:
+    /// token do máy chủ cấp, thông tin đã đăng ký và trạng thái "đã nộp, đang chờ máy chủ xác nhận".
+    /// </summary>
+    private sealed class SavedSession
+    {
+        public string Address { get; set; } = "";
+        public int Port { get; set; }
+        public string Room { get; set; } = "";
+        public string Pin { get; set; } = "";
+        public string Token { get; set; } = "";
+        public CandidateInfo Info { get; set; } = new();
+        public bool PendingSubmit { get; set; }
+        public bool Auto { get; set; }
+        public DateTime SubmittedAt { get; set; }
+        public DateTime SavedAt { get; set; }
+    }
 
     private static readonly string[] Rules =
     {
@@ -102,7 +126,65 @@ public partial class MainWindow : Window
         Deactivated += OnDeactivated;
         Closing += OnClosing;
         ImeHint.Text = ImeHintFor(ImeMode.Telex);
+        LoadSession();
     }
+
+    // =================== Phiên lưu trên máy ===================
+    private void LoadSession()
+    {
+        try
+        {
+            if (!File.Exists(_sessionFile)) return;
+            var s = JsonSerializer.Deserialize<SavedSession>(File.ReadAllText(_sessionFile));
+            // Chỉ dùng lại phiên còn mới (trong 12 giờ) và có đủ token, số báo danh.
+            if (s == null || s.Token.Length == 0 || s.Info == null || string.IsNullOrWhiteSpace(s.Info.Sbd) || (DateTime.Now - s.SavedAt).Duration() > TimeSpan.FromHours(12))
+            {
+                try { File.Delete(_sessionFile); } catch { }
+                return;
+            }
+            _saved = s;
+            PinBox.Text = s.Pin;
+            SbdBox.Text = s.Info.Sbd; NameBox.Text = s.Info.FullName; DobBox.Text = s.Info.BirthDate; ClassBox.Text = s.Info.ClassName;
+            FindError.Text = $"Máy này còn phiên làm bài chưa kết thúc của SBD {s.Info.Sbd} ({s.Room}). Chọn lại phòng thi và vào phòng để tiếp tục"
+                           + (s.PendingSubmit ? " — bài đã nộp sẽ được gửi lại cho máy chủ." : ".")
+                           + " Nếu bạn không phải thí sinh này, hãy nhập thông tin của mình.";
+        }
+        catch { _saved = null; }
+    }
+
+    /// <summary>Ghi thông tin phiên. <paramref name="now"/>=true: ghi xong ngay (lúc nộp bài), không chờ luồng nền.</summary>
+    private void SaveSession(bool now = false)
+    {
+        if (_room == null || _sessionToken.Length == 0) return;
+        try
+        {
+            var json = JsonSerializer.Serialize(new SavedSession
+            {
+                Address = _room.Address, Port = _room.Port, Room = _room.Room, Pin = _pin, Token = _sessionToken, Info = _info,
+                PendingSubmit = _submitted && !_confirmed, Auto = _autoSubmit, SubmittedAt = _submittedAt, SavedAt = DateTime.Now
+            });
+            if (now) _writer.WriteNow(_sessionFile, json); else _writer.Write(_sessionFile, json);
+        }
+        catch { }
+    }
+
+    private void DeleteSession()
+    {
+        _saved = null;
+        _writer.Delete(_sessionFile);
+    }
+
+    private FinalAnswers BuildFinal() => new()
+    {
+        Choices = new Dictionary<int, int>(_choices),
+        Essays = new Dictionary<int, string>(_essays),
+        Multi = _multi.ToDictionary(kv => kv.Key, kv => kv.Value.OrderBy(x => x).ToList()),
+        Tf = _tf.ToDictionary(kv => kv.Key, kv => new Dictionary<int, bool>(kv.Value)),
+        ShortAns = new Dictionary<int, string>(_short)
+    };
+
+    /// <summary>Gửi tin nộp bài kèm TOÀN BỘ bài làm cuối cùng (gồm phần tự luận vừa gõ, chưa kịp gửi lẻ).</summary>
+    private void SendSubmit(Connection? c) => c?.Send(Msg.Submit, new { auto = _autoSubmit, final = BuildFinal() });
 
     // =================== 1. Tìm phòng ===================
     private void StartWave()
@@ -200,17 +282,21 @@ public partial class MainWindow : Window
             if (_registered && !_released && (DateTime.Now - _lastRx).TotalSeconds > 12) _conn.Close();
         }
         // Đã nộp bài nhưng mất liên lạc với máy chủ hơn 1 phút: không giữ khoá máy vô thời hạn.
-        if (_submitted && _offline && !_released && (DateTime.Now - _offlineSince).TotalSeconds > 60) OfferExitOffline();
+        // Bài chưa được máy chủ xác nhận thì giữ máy lâu hơn (5 phút) để kịp gửi lại khi mạng trở lại.
+        if (_submitted && _offline && !_released && (DateTime.Now - _offlineSince).TotalSeconds > (_confirmed ? 60 : 300)) OfferExitOffline();
     }
 
     /// <summary>Đã nộp bài, máy chủ không còn liên lạc được: mở khoá để thí sinh thoát sau khi báo giám thị.</summary>
     private void OfferExitOffline()
     {
         _released = true;
+        if (_confirmed) DeleteSession();   // bài đã được máy chủ lưu: không cần giữ thông tin phiên trên máy nữa
         KioskGuard.Leave();
         Topmost = false;
         WaitTitle.Text = "Mất kết nối với máy chủ";
-        WaitSub.Text = "Bài làm của bạn đã được nộp và lưu lại. Hãy báo giám thị, sau đó có thể thoát ứng dụng.";
+        WaitSub.Text = _confirmed
+            ? "Bài làm của bạn đã được máy chủ lưu. Hãy báo giám thị, sau đó có thể thoát ứng dụng."
+            : "Bài làm CHƯA gửi được lên máy chủ và đang được giữ trên máy này. Hãy báo giám thị ngay; khi mở lại iTest và vào đúng phòng thi, bài sẽ được gửi lại.";
         ExitBtn.Visibility = Visibility.Visible;
     }
 
@@ -234,12 +320,23 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(SbdBox.Text)) miss.Add("số báo danh");
         if (string.IsNullOrWhiteSpace(NameBox.Text)) miss.Add("họ và tên");
         if (DobBox.Text.Length != 10) miss.Add("ngày sinh (dd/mm/yyyy)");
+        else if (!DateTime.TryParseExact(DobBox.Text, "dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var dob)
+                 || dob.Year < 1900 || dob > DateTime.Today)
+        { InfoError.Text = "Ngày sinh không hợp lệ. Nhập đúng ngày/tháng/năm, ví dụ 05/09/2009."; return; }
         if (string.IsNullOrWhiteSpace(ClassBox.Text)) miss.Add("lớp");
         if (miss.Count > 0) { InfoError.Text = "Vui lòng nhập " + string.Join(", ", miss) + "."; return; }
         if (AgreeBox.IsChecked != true) { InfoError.Text = "Bạn cần xác nhận cam kết tuân thủ nội quy."; return; }
         InfoError.Text = "";
         _info = new CandidateInfo { Sbd = SbdBox.Text.Trim(), FullName = NameBox.Text.Trim(), BirthDate = DobBox.Text, ClassName = ClassBox.Text.Trim() };
         if (_conn == null) { InfoError.Text = "Chưa kết nối được máy chủ. Vui lòng chờ kết nối lại."; return; }
+        // Mở lại ứng dụng sau khi máy khởi động lại: dùng token phiên đã lưu để máy chủ nhận đúng thí sinh cũ.
+        if (_saved != null && _sessionToken.Length == 0 && string.Equals(_saved.Info.Sbd.Trim(), _info.Sbd, StringComparison.OrdinalIgnoreCase))
+        {
+            _sessionToken = _saved.Token;
+            _resumePending = _saved.PendingSubmit;
+            _autoSubmit = _saved.Auto;
+            _submittedAt = _saved.SubmittedAt;
+        }
         _conn.Send(Msg.Register, RegisterPayload());
     }
 
@@ -281,6 +378,7 @@ public partial class MainWindow : Window
             case Msg.Registered:
                 _registered = true;
                 _sessionToken = m.Str("token");
+                SaveSession();
                 if (!_examRunning) SetInfoLocked(true);
                 if (_offline) SetOffline(false);   // máy chủ đã nhận lại phiên: hết trạng thái mất kết nối
                 break;
@@ -292,6 +390,7 @@ public partial class MainWindow : Window
                     break;
                 }
                 _registered = false;
+                _resumePending = false;
                 InfoError.Text = m.Str("reason");
                 SetInfoLocked(false);
                 break;
@@ -302,8 +401,8 @@ public partial class MainWindow : Window
             case Msg.Exam:
                 if (_submitted)
                 {
-                    // Đã nộp bài nhưng máy chủ chưa ghi nhận (rớt mạng đúng lúc nộp): nộp lại, không mở lại đề.
-                    _conn?.Send(Msg.Submit, new { auto = true });
+                    // Đã nộp bài nhưng máy chủ chưa ghi nhận (rớt mạng đúng lúc nộp): nộp lại kèm bản cuối, không mở lại đề.
+                    if (!_confirmed) SendSubmit(_conn);
                     break;
                 }
                 var exam = m.As<ClientExam>("exam");
@@ -311,8 +410,31 @@ public partial class MainWindow : Window
                 _exam = exam;
                 _secondsLeft = m.Int("secondsLeft");
                 _submitWindow = m.Int("submitWindow", 15);
+                _paused = m.Bool("paused");   // phòng đang tạm dừng thì đồng hồ máy này cũng đứng ngay
                 _zeroHold = 0;
                 StartExam();
+                if (_resumePending)
+                {
+                    // Ứng dụng được mở lại khi bài đã nộp nhưng chưa có xác nhận: giữ nguyên trạng thái đã nộp và gửi lại bản đã lưu trên máy.
+                    _resumePending = false;
+                    DoSubmit(_autoSubmit, restored: true);
+                }
+                break;
+            case Msg.SubmitDenied:
+                // Máy chủ chưa cho nộp (chưa tới thời gian được nộp theo đồng hồ máy chủ): mở lại bài để làm tiếp.
+                _secondsLeft = m.Int("secondsLeft");
+                _paused = m.Bool("paused");
+                _zeroHold = 0;
+                if (_examRunning && _submitted && !_confirmed)
+                {
+                    _submitted = false;
+                    SaveSession();
+                    DonePanel.Visibility = Visibility.Collapsed;
+                    Anim.Show(ExamPanel);
+                    _cheatTimer.Start();
+                    ShowNotice(m.Str("reason"), personal: true);
+                }
+                UpdateClock();
                 break;
             case Msg.Resume:
                 if (_submitted) break;
@@ -344,12 +466,14 @@ public partial class MainWindow : Window
                 if (_examRunning && !_submitted) DoSubmit(auto: true);
                 break;
             case Msg.Result:
-                // Máy chủ đã ghi nhận bài nộp: bản lưu tạm trên máy không còn cần nữa.
-                try { File.Delete(_localSave); } catch { }
+                // Tin này là lời xác nhận "máy chủ đã lưu bài": chỉ từ đây mới báo nộp thành công và bỏ bản lưu tạm trên máy.
+                OnServerConfirmed(m.Bool("revoked"));
                 ShowResult(m.Bool("showScore"), m.Int("right"), m.Int("wrong"), m.Int("blank"), m.Dbl("score"));
+                if (m.Bool("revoked")) NoScoreText.Visibility = Visibility.Collapsed;
                 break;
             case Msg.Release:
                 _released = true;
+                DeleteSession();
                 KioskGuard.Leave();
                 Topmost = false;
                 WaitTitle.Text = "Giám thị đã kết thúc phiên thi";
@@ -408,12 +532,16 @@ public partial class MainWindow : Window
                     AttachConnection(c);
                     SendHello(c);
                     c.Send(Msg.Register, RegisterPayload());
-                    if (_examRunning)
+                    if (_examRunning && _submitted)
+                    {
+                        // Bài đã nộp nhưng chưa được xác nhận: gửi lại tin nộp kèm bản cuối. Bài đã chốt trên máy chủ thì máy chủ chỉ xác nhận lại.
+                        if (!_confirmed) SendSubmit(c);
+                    }
+                    else if (_examRunning)
                     {
                         foreach (var (k, v) in _choices) c.Send(Msg.Answer, new { no = k, choice = v });
                         foreach (var (k, v) in _essays) c.Send(Msg.Essay, new { no = k, text = v });
                         ResendExtra(c);
-                        if (_submitted) c.Send(Msg.Submit, new { auto = true });
                     }
                     return;   // trạng thái "mất kết nối" chỉ tắt khi máy chủ xác nhận (tin Registered)
                 }
@@ -439,7 +567,8 @@ public partial class MainWindow : Window
         else if (_submitted && !_released)
         {
             WaitSub.Text = offline
-                ? "Mất kết nối với máy chủ · đang kết nối lại… Bài làm của bạn đã được lưu."
+                ? (_confirmed ? "Mất kết nối với máy chủ · đang kết nối lại… Bài làm của bạn đã được máy chủ lưu."
+                              : "Mất kết nối với máy chủ · đang kết nối lại… Bài làm đang được giữ trên máy này và sẽ tự gửi khi có mạng. Không tắt máy.")
                 : "Không tắt máy, không rời khỏi chỗ ngồi. Máy sẽ tự mở khoá khi giám thị đóng phiên.";
         }
     }
@@ -713,7 +842,7 @@ public partial class MainWindow : Window
             Text = _essays.TryGetValue(q.No, out var t) ? t : "", Margin = new Thickness(0, 6, 0, 0)
         };
         VietInput.Attach(box);
-        box.TextChanged += (_, _) => { _essays[q.No] = box.Text; _dirtyEssays.Add(q.No); UpdateProgress(); SaveLocal(); };
+        box.TextChanged += (_, _) => { if (_submitted) return; _essays[q.No] = box.Text; _dirtyEssays.Add(q.No); UpdateProgress(); SaveLocal(); };
         var bar = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
         foreach (var s in MathSymbols)
         {
@@ -765,8 +894,9 @@ public partial class MainWindow : Window
                 }
                 btn.Click += (_, _) =>
                 {
-                    if (Left() <= 0) return;
+                    if (Left() <= 0 || _submitted) return;
                     _audioPlays[no] = _audioPlays.GetValueOrDefault(no) + 1;
+                    SaveLocal();   // lượt nghe được lưu lại: mở lại ứng dụng không được nghe lại từ đầu
                     try { _player.Open(new Uri(path)); _player.Play(); } catch { }
                     Paint();
                 };
@@ -995,28 +1125,69 @@ public partial class MainWindow : Window
         if (r == MessageBoxResult.Yes) DoSubmit(auto: false);
     }
 
-    private void DoSubmit(bool auto)
+    private void DoSubmit(bool auto, bool restored = false)
     {
         if (_submitted) return;
-        // Ghi bản lưu tạm lần cuối trước khi khoá bài; chỉ xoá khi máy chủ xác nhận đã nhận bài (tin Result).
+        // Ghi bản lưu tạm lần cuối trước khi khoá bài; chỉ xoá khi máy chủ xác nhận đã lưu bài (tin Result).
         _saveDebounce.Stop();
-        SaveLocalNow();
+        if (!restored) SaveLocalNow();
         _submitted = true;
-        FlushEssays();
-        _conn?.Send(Msg.Submit, new { auto });
+        _confirmed = false;
+        _autoSubmit = auto;
+        if (!restored) _submittedAt = DateTime.Now;
+        _dirtyEssays.Clear(); _dirtyShort.Clear();
+        SendSubmit(_conn);          // tin nộp mang theo toàn bộ bài làm cuối cùng
+        SaveSession(now: true);     // máy khởi động lại lúc này vẫn nhớ "đã nộp, đang chờ máy chủ xác nhận"
         OfflineBar.Visibility = Visibility.Collapsed;
-        _submittedAt = DateTime.Now;
         SettingsPopup.IsOpen = false;
+        try { _player.Stop(); } catch { }
         ExamPanel.Visibility = Visibility.Collapsed;
         DoneExam.Text = $"{_exam?.ExamName} – {_exam?.Subject} · Mã đề {_exam?.Code}";
         DoneLine.Text = $"{_info.FullName} · SBD {_info.Sbd} · nộp lúc {_submittedAt:HH:mm}" + (auto ? " (tự động)" : "");
-        ReceiptText.Text = "Mã xác nhận nộp bài: " + $"{_info.Sbd}-{_exam?.Code}-{Math.Abs((_info.Sbd + _submittedAt.Ticks).GetHashCode()) % 10000:0000}";
+        // Chưa báo "thành công" cho tới khi máy chủ xác nhận đã lưu bài.
+        DoneHeading.Text = "Đang gửi bài lên máy chủ…";
+        DoneCheck.Text = "…";
+        ReceiptText.Text = "Chưa có xác nhận của máy chủ · không tắt máy, không rời chỗ ngồi.";
+        ScoreBox.Visibility = Visibility.Collapsed;
+        NoScoreText.Visibility = Visibility.Collapsed;
         Anim.Show(DonePanel);
-        var st = (ScaleTransform)DoneCheck.RenderTransform;
-        var pop = new DoubleAnimation(0, 1, TimeSpan.FromSeconds(0.5)) { EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.6 } };
-        st.BeginAnimation(ScaleTransform.ScaleXProperty, pop);
-        st.BeginAnimation(ScaleTransform.ScaleYProperty, pop);
         if (_offline) SetOffline(true);
+    }
+
+    /// <summary>Máy chủ xác nhận đã lưu bài (hoặc đã tự chốt bài: hết giờ, đình chỉ).</summary>
+    private void OnServerConfirmed(bool revoked)
+    {
+        bool first = !_confirmed;
+        _confirmed = true;
+        if (!_submitted)
+        {
+            // Máy chủ chốt bài trước khi máy này kịp nộp (bị thu bài do vi phạm, hoặc mở lại ứng dụng sau khi bài đã chốt).
+            _submitted = true;
+            _saveDebounce.Stop();
+            if (_submittedAt == default) _submittedAt = DateTime.Now;
+            SettingsPopup.IsOpen = false;
+            try { _player.Stop(); } catch { }
+            ExamPanel.Visibility = Visibility.Collapsed;
+            InfoPanel.Visibility = Visibility.Collapsed;
+            FindPanel.Visibility = Visibility.Collapsed;
+            OfflineBar.Visibility = Visibility.Collapsed;
+            DoneExam.Text = _exam != null ? $"{_exam.ExamName} – {_exam.Subject} · Mã đề {_exam.Code}" : RoomLine.Text;
+            DoneLine.Text = $"{_info.FullName} · SBD {_info.Sbd}";
+            if (DonePanel.Visibility != Visibility.Visible) Anim.Show(DonePanel);
+        }
+        _writer.Delete(_localSave);   // xếp sau các lần ghi còn chờ, để bản lưu tạm không bị ghi lại sau khi xoá
+        SaveSession();
+        DoneHeading.Text = revoked ? "Bài thi đã bị thu" : "Đã nộp bài thành công";
+        DoneCheck.Text = revoked ? "!" : "✓";
+        ReceiptText.Text = revoked ? "Kết quả bài thi bị huỷ theo quyết định của giám thị."
+            : $"Máy chủ đã lưu bài · mã xác nhận: {_info.Sbd}-{_exam?.Code}-{_submittedAt:HHmmss}";
+        if (first)
+        {
+            var st = (ScaleTransform)DoneCheck.RenderTransform;
+            var pop = new DoubleAnimation(0, 1, TimeSpan.FromSeconds(0.5)) { EasingFunction = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.6 } };
+            st.BeginAnimation(ScaleTransform.ScaleXProperty, pop);
+            st.BeginAnimation(ScaleTransform.ScaleYProperty, pop);
+        }
     }
 
     private void ShowResult(bool showScore, int right, int wrong, int blank, double score)
@@ -1142,9 +1313,9 @@ public partial class MainWindow : Window
 
     // ---- Lưu cục bộ (phòng mất kết nối / mất điện) ----
     /// <summary>Gom các lần lưu (gõ phím liên tục) lại, ghi đĩa tối đa mỗi giây một lần.</summary>
-    private void SaveLocal() { _saveDebounce.Stop(); _saveDebounce.Start(); }
+    /// Không khởi động lại đồng hồ ở mỗi phím gõ (gõ liên tục sẽ khiến việc lưu bị hoãn mãi): lần lưu đã hẹn vẫn chạy đúng hạn.
+    private void SaveLocal() { if (!_saveDebounce.IsEnabled) _saveDebounce.Start(); }
 
-    private readonly object _localSaveLock = new();
     private void SaveLocalNow()
     {
         if (_submitted) return;
@@ -1153,22 +1324,21 @@ public partial class MainWindow : Window
         try
         {
             json = JsonSerializer.Serialize(new { sbd = _info.Sbd, code = _exam?.Code, exam = ExamKey(),
+                audioPlays = new Dictionary<int, int>(_audioPlays),
                 choices = new Dictionary<int, int>(_choices), essays = new Dictionary<int, string>(_essays),
                 multi = _multi.ToDictionary(kv => kv.Key, kv => kv.Value.ToList()),
                 tf = _tf.ToDictionary(kv => kv.Key, kv => new Dictionary<int, bool>(kv.Value)),
                 shortAns = new Dictionary<int, string>(_short) });
         }
         catch { return; }
-        var path = _localSave;
-        Task.Run(() =>
-        {
-            try { lock (_localSaveLock) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); File.WriteAllText(path, json); } }
-            catch { }
-        });
+        // Ghi nền theo đúng thứ tự (bản cũ không đè bản mới) và qua file tạm (không để lại file ghi dở).
+        _writer.Write(_localSave, json);
     }
 
     /// <summary>Dấu nhận diện bài thi, để bản lưu tạm của bài thi khác (cùng SBD, cùng mã đề) không bị nạp nhầm.</summary>
-    private string ExamKey() => _exam == null ? "" : $"{_exam.ExamName}|{_exam.Subject}|{_exam.SchoolYear}|{_exam.Questions.Count}|{DateTime.Today:yyyyMMdd}";
+    private string ExamKey() => _exam == null ? ""
+        : _exam.Fingerprint.Length > 0 ? $"{_exam.Fingerprint}|{_exam.Code}|{_exam.Questions.Count}"   // dấu vân tay SHA-256 của bộ đề do máy chủ gắn
+        : $"{_exam.ExamName}|{_exam.Subject}|{_exam.SchoolYear}|{_exam.Questions.Count}|{DateTime.Today:yyyyMMdd}";
 
     private void LoadLocalSave()
     {
@@ -1189,6 +1359,8 @@ public partial class MainWindow : Window
             if (tf != null) foreach (var (k, v) in tf) if (!_tf.ContainsKey(k)) { _tf[k] = v; }
             if (sh != null) foreach (var (k, v) in sh) if (!_short.ContainsKey(k)) { _short[k] = v; _dirtyShort.Add(k); }
             foreach (var k in _multi.Keys.Concat(_tf.Keys)) _dirtyShort.Add(k);
+            var plays = node.As<Dictionary<int, int>>("audioPlays");
+            if (plays != null) foreach (var (k, v) in plays) if (v > _audioPlays.GetValueOrDefault(k)) _audioPlays[k] = v;
         }
         catch { }
     }

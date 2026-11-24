@@ -21,6 +21,8 @@ public sealed class RoomState
     public string Proctor { get; set; } = "";
     public string RoomPin { get; set; } = "";
     public string PackagePath { get; set; } = "";
+    /// <summary>Dấu vân tay SHA-256 của bộ đề đã dùng; khi khôi phục phải chọn đúng bộ đề có cùng dấu này.</summary>
+    public string ExamHash { get; set; } = "";
     public string BackupDir { get; set; } = "";
     public Phase Phase { get; set; }
     public int SecondsLeft { get; set; }
@@ -82,7 +84,25 @@ public sealed class RoomService : IDisposable
     public bool Paused { get; private set; }
     public int SecondsLeft { get; private set; }
     public int SubmitWindowMinutes { get; set; } = 15;
-    public bool ShowScore { get; set; }
+    private bool _showScore;
+    /// <summary>Cho thí sinh xem điểm trắc nghiệm sau khi nộp. Đổi lựa chọn thì gửi lại kết quả cho các máy đã nộp.</summary>
+    public bool ShowScore
+    {
+        get => _showScore;
+        set
+        {
+            if (_showScore == value) return;
+            _showScore = value;
+            foreach (var c in Candidates.Where(c => c.Conn != null && c.Status == CandStatus.Done)) SendResult(c);
+        }
+    }
+    /// <summary>Dấu vân tay của bộ đề đang dùng.</summary>
+    public string ExamHash { get; private set; } = "";
+    /// <summary>Đang xuất kết quả: không được đóng phòng hay thoát cho tới khi xuất xong.</summary>
+    public bool Exporting { get; set; }
+    private bool _collectAllPending;
+    private readonly OrderedWriter _writer = new();
+    private readonly Dictionary<string, DateTime> _rejectLogged = new();
     public DateTime? StartedAt { get; private set; }
     public DateTime? EndedAt { get; private set; }
     public bool Exported { get; set; }
@@ -103,6 +123,7 @@ public sealed class RoomService : IDisposable
     {
         Exam = content.Exam;
         Media = content.Media;
+        ExamHash = content.Fingerprint;
         PackagePath = path;
         Layouts = Shuffler.Build(Exam);
         _clientExams.Clear();
@@ -113,8 +134,13 @@ public sealed class RoomService : IDisposable
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<ClientExam>> _clientExams = new();
     private ClientExam ClientExamFor(CodeLayout layout)
     {
-        var exam = Exam; var media = Media; var dept = Department; var school = School;
-        return _clientExams.GetOrAdd(layout.Code, _ => new Lazy<ClientExam>(() => Shuffler.ToClient(exam, layout, media, dept, school))).Value;
+        var exam = Exam; var media = Media; var dept = Department; var school = School; var hash = ExamHash;
+        return _clientExams.GetOrAdd(layout.Code, _ => new Lazy<ClientExam>(() =>
+        {
+            var ce = Shuffler.ToClient(exam, layout, media, dept, school);
+            ce.Fingerprint = hash;
+            return ce;
+        })).Value;
     }
 
     // ---------------- Mở / đóng phòng ----------------
@@ -172,7 +198,8 @@ public sealed class RoomService : IDisposable
         {
             TcpClient tcp;
             try { tcp = await l.AcceptTcpClientAsync(); } catch { return; }
-            var conn = new Connection(tcp, isServer: true, RoomPin);
+            // Máy thí sinh gửi nhịp tim 3 giây một lần; kết nối im lặng quá 30 giây (kể cả chưa đăng ký) bị đóng để không chiếm chỗ.
+            var conn = new Connection(tcp, isServer: true, RoomPin) { IdleTimeout = TimeSpan.FromSeconds(30) };
             conn.Received += (c, m) => _ui.BeginInvoke(() => OnMessage(c, m));
             conn.Closed += c => _ui.BeginInvoke(() => OnClosed(c));
             _ui.Invoke(() =>
@@ -189,10 +216,17 @@ public sealed class RoomService : IDisposable
     private const int MaxPending = 300;
     private Candidate? ByConn(Connection c) => Candidates.FirstOrDefault(x => x.Conn == c);
 
-    /// <summary>Số câu hợp lệ của thí sinh (chặn máy gửi số câu bừa làm phình bộ nhớ).</summary>
-    private bool ValidNo(int no) => no >= 1 && no <= Math.Max(1, Exam.Questions.Count);
-    private const int MaxEssayChars = 200_000, MaxShortChars = 500;
     private static string Clip(string s, int max) => s.Length <= max ? s : s[..max];
+    private CodeLayout? LayoutOf(Candidate c) => Layouts.FirstOrDefault(l => l.Code == c.Sheet.Code);
+
+    /// <summary>Ghi nhận kết quả kiểm tra một câu trả lời: hợp lệ thì cập nhật tiến độ, sai định dạng thì ghi nhật ký (một lần mỗi máy).</summary>
+    private void Accepted(Candidate cand, bool ok)
+    {
+        if (ok) { cand.NotifyProgress(); return; }
+        if (cand.BadDataLogged) return;
+        cand.BadDataLogged = true;
+        Log("CẢNH BÁO", cand.Machine, $"gửi câu trả lời không hợp lệ (sai số câu, loại câu hoặc phương án) · đã bỏ qua · {cand.FullName}");
+    }
 
     // ---------------- Thông điệp từ máy thí sinh ----------------
     /// <summary>Mọi tin từ mạng đi qua đây; dữ liệu sai định dạng từ một máy không được phép làm sập máy chủ.</summary>
@@ -217,29 +251,41 @@ public sealed class RoomService : IDisposable
                 return;
             case Msg.Hello:
                 conn.Send(Msg.Welcome, new { room = Room, proctor = Proctor, exam = $"{Exam.ExamName} – {Exam.Subject}" });
-                _helloMachine[conn] = m.Str("machine");
-                _helloToken[conn] = m.Str("token");
+                _helloMachine[conn] = Clip(m.Str("machine"), 60);
+                _helloToken[conn] = Clip(m.Str("token"), 64);
                 break;
             case Msg.Register:
+                // Token phiên đi kèm tin đăng ký (ưu tiên) hoặc tin chào.
+                var regToken = Clip(m.Str("token"), 64);
+                if (regToken.Length > 0) _helloToken[conn] = regToken;
                 OnRegister(conn, m.As<CandidateInfo>() ?? new CandidateInfo());
                 break;
             case Msg.Answer:
-                if (cand == null || !cand.IsActive || !ValidNo(m.Int("no"))) break;
-                cand.Sheet.Choices[m.Int("no")] = m.Int("choice", -1);
-                cand.NotifyProgress();
+            {
+                if (cand == null || cand.Status != CandStatus.Doing) return;
+                var lay = LayoutOf(cand);
+                if (lay == null) return;
+                Accepted(cand, AnswerRules.SetChoice(Exam, lay, cand.Sheet, m.Int("no"), m.Int("choice", -1)));
                 return;
+            }
             case Msg.AnswerEx:
-                if (cand == null || !cand.IsActive) return;
+            {
+                if (cand == null || cand.Status != CandStatus.Doing) return;
+                var lay = LayoutOf(cand);
                 var ax = m.As<AnswerEx>();
-                if (ax == null || !ValidNo(ax.No)) return;
-                switch (ax.Type)
+                if (lay == null || ax == null) return;
+                // Loại câu do máy chủ tự xác định theo đề, không tin trường "type" máy thí sinh gửi.
+                var q = AnswerRules.QuestionAt(Exam, lay, ax.No);
+                bool ok = q?.Type switch
                 {
-                    case QuestionType.MultiSelect: cand.Sheet.Multi[ax.No] = (ax.Choices ?? new()).Distinct().Take(16).ToList(); break;
-                    case QuestionType.TrueFalse: cand.Sheet.Tf[ax.No] = (ax.Tf ?? new()).Where(kv => kv.Key is >= 0 and < 16).ToDictionary(kv => kv.Key, kv => kv.Value); break;
-                    case QuestionType.ShortAnswer: cand.Sheet.Short[ax.No] = Clip(ax.Text ?? "", MaxShortChars); break;
-                }
-                cand.NotifyProgress();
+                    QuestionType.MultiSelect => ax.Type == q.Type && AnswerRules.SetMulti(Exam, lay, cand.Sheet, ax.No, ax.Choices),
+                    QuestionType.TrueFalse => ax.Type == q.Type && AnswerRules.SetTf(Exam, lay, cand.Sheet, ax.No, ax.Tf),
+                    QuestionType.ShortAnswer => ax.Type == q.Type && AnswerRules.SetShort(Exam, lay, cand.Sheet, ax.No, ax.Text),
+                    _ => false
+                };
+                Accepted(cand, ok);
                 return;
+            }
             case Msg.Cheat:
                 if (cand == null) return;
                 cand.CheatCount++;
@@ -247,13 +293,15 @@ public sealed class RoomService : IDisposable
                 Log("GIAN LẬN", cand.Machine, $"{Clip(m.Str("detail"), 300)} · {cand.FullName}");
                 break;
             case Msg.Essay:
-                if (cand == null || !cand.IsActive || !ValidNo(m.Int("no"))) break;
-                cand.Sheet.Essays[m.Int("no")] = Clip(m.Str("text"), MaxEssayChars);
-                cand.NotifyProgress();
+            {
+                if (cand == null || cand.Status != CandStatus.Doing) return;
+                var lay = LayoutOf(cand);
+                if (lay == null) return;
+                Accepted(cand, AnswerRules.SetEssay(Exam, lay, cand.Sheet, m.Int("no"), m.Str("text")));
                 return;
+            }
             case Msg.Submit:
-                if (cand == null || cand.Status != CandStatus.Doing) break;
-                FinishCandidate(cand, m.Bool("auto") ? "tự động nộp bài khi hết giờ" : "đã nộp bài");
+                OnSubmit(conn, cand, m);
                 break;
             case Msg.Focus:
                 if (cand != null && cand.IsActive)
@@ -279,23 +327,49 @@ public sealed class RoomService : IDisposable
         }
         var machine = _helloMachine.TryGetValue(conn, out var mm) && mm.Length > 0 ? Clip(mm, 60) : conn.RemoteAddress;
         var clientToken = _helloToken.TryGetValue(conn, out var tk) ? tk : "";
-        var existing = Candidates.FirstOrDefault(c => string.Equals(c.Sbd, info.Sbd, StringComparison.OrdinalIgnoreCase)) ?? ByConn(conn);
-        // Chỉ cho giành lại phiên khi: đúng token phiên (chính máy thí sinh đó, rớt mạng rồi vào lại),
-        // hoặc phiên cũ đã mất kết nối / được giám thị duyệt chuyển máy. Không còn dựa vào tên máy (có thể giả mạo).
-        bool tokenOk = existing != null && existing.Token.Length > 0 && existing.Token == clientToken;
-        if (existing != null && existing.Conn != null && existing.Conn != conn
-            && (tokenOk || existing.Status is CandStatus.Lost or CandStatus.Moving || existing.MoveApproved))
+        var mine = ByConn(conn);   // kết nối này đã đăng ký trước đó (đang sửa thông tin)
+        var existing = Candidates.FirstOrDefault(c => string.Equals(c.Sbd, info.Sbd, StringComparison.OrdinalIgnoreCase)) ?? mine;
+        if (existing != null && existing.Conn != conn)
         {
-            var old = existing.Conn;
-            existing.Conn = null;
-            old.Close();
-            if (existing.Status == CandStatus.Doing) existing.Status = CandStatus.Lost;
+            // Chống chiếm phiên: số báo danh đã có bài làm thì chỉ máy giữ đúng token phiên mới được vào lại;
+            // máy khác (hoặc máy đã mất token) phải được giám thị duyệt "Chuyển máy". Không dựa vào tên máy hay trạng thái mất kết nối.
+            bool started = existing.Status is not (CandStatus.Waiting or CandStatus.Connected);
+            bool tokenOk = existing.Token.Length > 0 && clientToken.Length > 0 && existing.Token == clientToken;
+            bool approved = existing.MoveApproved || existing.Status == CandStatus.Moving;
+            if (!SessionRules.MayAttach(started, tokenOk, approved, existing.Conn != null))
+            {
+                string reason = !started
+                    ? $"Số báo danh {info.Sbd} đang được dùng ở máy {existing.Machine}. Kiểm tra lại số báo danh hoặc báo giám thị."
+                    : existing.Status is CandStatus.Done or CandStatus.Revoked
+                        ? $"Số báo danh {info.Sbd} đã kết thúc bài thi. Báo giám thị nếu có nhầm lẫn."
+                        : $"Số báo danh {info.Sbd} đã có phiên làm bài (máy {existing.Machine}). Nếu bạn đổi máy hoặc máy vừa khởi động lại, hãy báo giám thị bấm “Chuyển máy” rồi đăng nhập lại.";
+                conn.Send(Msg.Reject, new { reason });
+                var key = info.Sbd + "|" + machine;
+                if (!_rejectLogged.TryGetValue(key, out var at) || (DateTime.Now - at).TotalSeconds > 60)
+                {
+                    _rejectLogged[key] = DateTime.Now;
+                    Log("CẢNH BÁO", machine, $"thử vào bằng SBD {info.Sbd} đang thuộc phiên ở máy {existing.Machine} · đã từ chối" +
+                        (started && existing.IsActive ? " · nếu đúng là thí sinh đổi máy, bấm “Chuyển máy”" : ""));
+                }
+                return;
+            }
+            if (existing.Conn != null)
+            {
+                var old = existing.Conn;
+                existing.Conn = null;
+                old.Close();
+                if (existing.Status == CandStatus.Doing) existing.Status = CandStatus.Lost;
+            }
         }
-        if (existing != null && existing.Conn != null && existing.Conn != conn && existing.Status != CandStatus.Lost && !existing.MoveApproved
-            && existing.Status != CandStatus.Moving)
+        // Kết nối này trước đó đăng ký bằng số báo danh khác (sửa thông tin): bỏ dòng cũ còn ở phòng chờ.
+        if (mine != null && mine != existing)
         {
-            conn.Send(Msg.Reject, new { reason = $"Số báo danh {info.Sbd} đang được dùng ở máy {existing.Machine}. Báo giám thị nếu cần chuyển máy." });
-            return;
+            mine.Conn = null;
+            if (mine.Status is CandStatus.Waiting or CandStatus.Connected)
+            {
+                Candidates.Remove(mine);
+                for (int i = 0; i < Candidates.Count; i++) Candidates[i].Index = i;
+            }
         }
         _pending.Remove(conn);
         Candidate cand;
@@ -311,6 +385,8 @@ public sealed class RoomService : IDisposable
             {
                 var wasMoving = cand.Status == CandStatus.Moving || cand.MoveApproved;
                 cand.MoveApproved = false;
+                // Chuyển máy xong: cấp token mới, token của máy cũ hết hiệu lực.
+                if (wasMoving) cand.Token = SessionRules.NewToken();
                 cand.Status = CandStatus.Doing;
                 Log(wasMoving ? "CHUYỂN MÁY" : "THAM GIA", cand.Machine,
                     wasMoving ? $"{info.FullName} đã đăng nhập máy mới (từ {oldMachine}) · tiếp tục từ bản lưu, còn {Fmt(LeftOf(cand))}"
@@ -331,7 +407,8 @@ public sealed class RoomService : IDisposable
             Candidates.Add(cand);
             Log("THAM GIA", cand.Machine, $"vừa tham gia phòng thi · {info.FullName} · SBD {info.Sbd}");
         }
-        if (cand.Token.Length == 0) cand.Token = Guid.NewGuid().ToString("N");
+        if (cand.MoveApproved) { cand.MoveApproved = false; cand.Token = SessionRules.NewToken(); }
+        if (cand.Token.Length == 0) cand.Token = SessionRules.NewToken();
         conn.Send(Msg.Registered, new { token = cand.Token });
         if (Phase == Phase.Running && cand.Status == CandStatus.Doing)
         {
@@ -344,10 +421,45 @@ public sealed class RoomService : IDisposable
             conn.Send(Msg.Notice, new { kind = "all", text = "Bạn vào phòng sau khi đề đã được phát. Vui lòng chờ giám thị phát đề cho máy của bạn." });
             Log("CHỜ PHÁT ĐỀ", cand.Machine, $"vào phòng sau khi đã phát đề · chờ phát đề riêng · {cand.FullName}");
         }
-        else if (cand.Status == CandStatus.Done)
+        else if (cand.Status is CandStatus.Done or CandStatus.Revoked)
             SendResult(cand);
         cand.Left = Fmt(LeftOf(cand));
         cand.LastSeen = DateTime.Now;
+    }
+
+    /// <summary>
+    /// Thí sinh nộp bài. Máy chủ tự kiểm tra quy định thời gian nộp (không tin cờ "auto" của máy thí sinh),
+    /// ghi bản bài làm cuối cùng gửi kèm rồi mới chốt bài. Bài đã chốt không bị tin nộp lại ghi đè.
+    /// </summary>
+    private void OnSubmit(Connection conn, Candidate? cand, JsonObject m)
+    {
+        if (cand == null) return;
+        if (cand.Status is CandStatus.Done or CandStatus.Revoked)
+        {
+            // Máy thí sinh gửi lại sau khi rớt mạng: bài đã chốt, chỉ xác nhận lại, không nhận thêm dữ liệu.
+            SendResult(cand);
+            return;
+        }
+        if (cand.Status != CandStatus.Doing) return;
+        bool collecting = cand.CollectDeadline != null;
+        int left = LeftOf(cand);
+        if (!SessionRules.CanSubmit(left, SubmitWindowMinutes, collecting))
+        {
+            conn.Send(Msg.SubmitDenied, new
+            {
+                secondsLeft = left, paused = Paused,
+                reason = $"Chưa đến thời gian được nộp bài (chỉ nộp trong {SubmitWindowMinutes} phút cuối). Bạn tiếp tục làm bài."
+            });
+            Log("CẢNH BÁO", cand.Machine, $"nộp bài khi còn {Fmt(left)} · chưa tới thời gian được nộp · đã từ chối · {cand.FullName}");
+            return;
+        }
+        var layout = LayoutOf(cand);
+        if (layout != null)
+        {
+            int bad = AnswerRules.ApplyFinal(Exam, layout, cand.Sheet, m.As<FinalAnswers>("final"));
+            if (bad > 0) Accepted(cand, false);
+        }
+        FinishCandidate(cand, collecting ? cand.CollectText : m.Bool("auto") ? "tự động nộp bài khi hết giờ" : "đã nộp bài");
     }
 
     private void OnClosed(Connection conn)
@@ -358,7 +470,12 @@ public sealed class RoomService : IDisposable
         var cand = ByConn(conn);
         if (cand == null) return;
         cand.Conn = null;
-        if (cand.Status == CandStatus.Doing)
+        if (cand.Status == CandStatus.Doing && cand.CollectDeadline != null)
+        {
+            // Đang thu bài mà máy mất kết nối: chốt bài theo bản máy chủ đang giữ.
+            FinishCandidate(cand, cand.CollectText + " (máy mất kết nối, dùng bản đã lưu trên máy chủ)");
+        }
+        else if (cand.Status == CandStatus.Doing)
         {
             cand.Status = cand.MoveApproved ? CandStatus.Moving : CandStatus.Lost;
             Log("NGOẠI TUYẾN", cand.Machine, $"vừa ngoại tuyến · máy chủ không tìm thấy máy · tạm dừng giờ của {cand.FullName}");
@@ -386,6 +503,7 @@ public sealed class RoomService : IDisposable
         var layout = Layouts.FirstOrDefault(l => l.Code == c.Sheet.Code);
         if (conn == null || layout == null) return;
         int left = LeftOf(c), window = SubmitWindowMinutes;
+        bool paused = Paused;   // máy nối lại lúc phòng đang tạm dừng phải đứng đồng hồ ngay, không chờ tin giờ kế tiếp
         object? saved = !resume ? null : new
         {
             choices = new Dictionary<int, int>(c.Sheet.Choices),
@@ -398,7 +516,7 @@ public sealed class RoomService : IDisposable
         {
             try
             {
-                conn.Send(Msg.Exam, new { exam = ClientExamFor(layout), secondsLeft = left, submitWindow = window });
+                conn.Send(Msg.Exam, new { exam = ClientExamFor(layout), secondsLeft = left, submitWindow = window, paused });
                 if (saved != null) conn.Send(Msg.Resume, saved);
             }
             catch (Exception ex) { ITest.UI.CrashGuard.Write(ex); }
@@ -462,17 +580,29 @@ public sealed class RoomService : IDisposable
         TickCount++;
         if (Phase == Phase.Running && !Paused)
         {
-            if (SecondsLeft > 0) SecondsLeft--;
-            foreach (var c in Candidates)
+            // Đồng hồ phòng chạy về 0 thì dừng; từ đó giờ cộng riêng của từng thí sinh mới bị trừ dần
+            // (trước đây giờ cộng riêng đứng yên mãi sau khi đồng hồ phòng về 0).
+            bool roomRunning = SecondsLeft > 0;
+            if (roomRunning) SecondsLeft--;
+            foreach (var c in Candidates.ToList())
             {
-                if (c.Status is CandStatus.Lost or CandStatus.Moving) c.ExtraSeconds++;
-                if (c.Status == CandStatus.Doing && LeftOf(c) <= 0)
+                if (c.Status is CandStatus.Lost or CandStatus.Moving)
                 {
-                    c.Conn?.Send(Msg.Collect);
-                    FinishCandidate(c, "hết giờ · đã tự động thu bài");
+                    if (roomRunning) c.ExtraSeconds++;   // bù đúng phần giờ phòng vừa trôi; phòng đã về 0 thì giờ của máy này đứng yên
                 }
+                else if (c.Status == CandStatus.Doing && !roomRunning && c.ExtraSeconds > 0 && c.CollectDeadline == null)
+                    c.ExtraSeconds--;
+                if (c.Status == CandStatus.Doing && c.CollectDeadline == null && LeftOf(c) <= 0)
+                    BeginCollect(c, "hết giờ · đã tự động thu bài");
             }
-            if (Candidates.Count > 0 && Candidates.All(c => !c.IsActive) && SecondsLeft == 0) EndExam("Hết giờ · đã thu bài tất cả thí sinh");
+        }
+        // Thu bài: chờ bản cuối từ máy thí sinh tối đa 10 giây, quá hạn thì chốt theo bản máy chủ đang giữ.
+        foreach (var c in Candidates.Where(c => c.CollectDeadline != null && (c.Conn == null || DateTime.UtcNow >= c.CollectDeadline)).ToList())
+            FinishCandidate(c, c.CollectText + " (không nhận được bản cuối, dùng bản đã lưu trên máy chủ)");
+        if (Phase == Phase.Running && Candidates.Count > 0 && Candidates.All(c => !c.IsActive))
+        {
+            if (_collectAllPending) EndExam("Giám thị đã thu bài tất cả thí sinh");
+            else if (SecondsLeft <= 0 && !Paused) EndExam("Hết giờ · đã thu bài tất cả thí sinh");
         }
         // Máy không gửi nhịp tim quá 10 giây (mất điện, rút dây mạng…) được coi là mất kết nối.
         foreach (var c in Candidates.Where(c => c.Conn != null && (DateTime.Now - c.LastSeen).TotalSeconds > 10).ToList())
@@ -480,7 +610,7 @@ public sealed class RoomService : IDisposable
         foreach (var c in Candidates)
         {
             c.Left = Phase == Phase.Collected ? "—" : Fmt(LeftOf(c)) + (c.ExtraSeconds > 0 && Phase == Phase.Running ? "*" : "");
-            if (Phase == Phase.Running && c.Status == CandStatus.Doing && TickCount % 5 == 0)
+            if (Phase == Phase.Running && c.Status == CandStatus.Doing && c.CollectDeadline == null && TickCount % 5 == 0)
                 c.Conn?.Send(Msg.Time, new { secondsLeft = LeftOf(c), paused = Paused });
         }
         // Sao lưu tự động chỉ chạy sau khi đã phát đề (lúc chưa phát đề không có bài làm để lưu).
@@ -505,23 +635,39 @@ public sealed class RoomService : IDisposable
         Log("CỘNG GIỜ", "", $"Cộng thêm {minutes} phút cho toàn phòng");
     }
 
-    public bool CanCollectAll => Phase == Phase.Running && SecondsLeft <= SubmitWindowMinutes * 60;
+    public bool CanCollectAll => Phase == Phase.Running && !_collectAllPending && SecondsLeft <= SubmitWindowMinutes * 60;
+    /// <summary>Thời gian tối đa máy chủ chờ bản bài làm cuối cùng của một máy khi thu bài.</summary>
+    private const int CollectWaitSeconds = 10;
+
+    /// <summary>
+    /// Thu bài một thí sinh: báo máy thí sinh gửi bản cuối cùng (gồm phần tự luận vừa gõ) rồi chờ tối đa 10 giây.
+    /// Máy đang mất kết nối thì chốt ngay theo bản máy chủ đang giữ.
+    /// </summary>
+    private void BeginCollect(Candidate c, string text)
+    {
+        if (c.Status is CandStatus.Done or CandStatus.Revoked || c.CollectDeadline != null) return;
+        if (c.Conn == null || c.Status != CandStatus.Doing) { FinishCandidate(c, text); return; }
+        c.CollectText = text;
+        c.CollectDeadline = DateTime.UtcNow.AddSeconds(CollectWaitSeconds);
+        c.Conn.Send(Msg.Collect);
+        c.NotifyProgress();
+    }
 
     public void CollectAll()
     {
         if (!CanCollectAll) return;
-        foreach (var c in Candidates.Where(c => c.IsActive).ToList())
-        {
-            c.Conn?.Send(Msg.Collect);
-            FinishCandidate(c, "đã được thu bài");
-        }
-        EndExam("Giám thị đã thu bài tất cả thí sinh");
+        _collectAllPending = true;
+        Log("NỘP BÀI", "", $"Giám thị thu bài tất cả · chờ các máy gửi bản cuối (tối đa {CollectWaitSeconds} giây)");
+        foreach (var c in Candidates.Where(c => c.IsActive).ToList()) BeginCollect(c, "đã được thu bài");
+        if (Candidates.All(c => !c.IsActive)) EndExam("Giám thị đã thu bài tất cả thí sinh");
+        Changed?.Invoke();
     }
 
     private void EndExam(string text)
     {
         if (Phase == Phase.Collected) return;
         Phase = Phase.Collected;
+        _collectAllPending = false;
         EndedAt = DateTime.Now;
         Backup();
         Log("NỘP BÀI", "", text);
@@ -531,18 +677,39 @@ public sealed class RoomService : IDisposable
     private void FinishCandidate(Candidate c, string text)
     {
         if (c.Status is CandStatus.Done or CandStatus.Revoked) return;
+        c.CollectDeadline = null;
         c.Sheet.SubmittedAt = DateTime.Now;
         c.Status = CandStatus.Done;
         Log("NỘP BÀI", c.Machine, $"{text} · {c.FullName} ({c.Answered}/{c.TotalQuestions})");
-        SendResult(c);
+        // Chỉ xác nhận với máy thí sinh SAU KHI bài đã nằm trên đĩa máy chủ.
+        var saved = SaveState();
+        saved.ContinueWith(t => _ui.BeginInvoke(() =>
+        {
+            if (!(t.Status == TaskStatus.RanToCompletion && t.Result) && !_saveFailLogged)
+            {
+                _saveFailLogged = true;
+                Log("CẢNH BÁO", "", "KHÔNG GHI ĐƯỢC BẢN SAO LƯU xuống đĩa (đĩa đầy hoặc bị khoá?). Bài làm vẫn nằm trong bộ nhớ máy chủ — hãy kiểm tra ổ đĩa và xuất kết quả sớm.");
+            }
+            SendResult(c);
+        }));
     }
+    private bool _saveFailLogged;
 
+    /// <summary>
+    /// Xác nhận với máy thí sinh rằng bài đã được máy chủ lưu. Điểm thật chỉ được gửi khi giám thị cho xem điểm;
+    /// nếu không, máy thí sinh không nhận được con số nào (kể cả số câu đúng/sai).
+    /// </summary>
     private void SendResult(Candidate c)
     {
-        var layout = Layouts.FirstOrDefault(l => l.Code == c.Sheet.Code);
-        if (layout == null) return;
+        if (c.Conn == null) return;
+        var layout = LayoutOf(c);
+        if (!ShowScore || c.Sheet.Revoked || c.Status != CandStatus.Done || layout == null)
+        {
+            c.Conn.Send(Msg.Result, new { showScore = false, revoked = c.Sheet.Revoked });
+            return;
+        }
         var r = Scoring.GradeMc(Exam, layout, c.Sheet);
-        c.Conn?.Send(Msg.Result, new { showScore = ShowScore, right = r.Right, wrong = r.Wrong, blank = r.Blank, score = r.Score });
+        c.Conn.Send(Msg.Result, new { showScore = true, right = r.Right, wrong = r.Wrong, blank = r.Blank, score = r.Score });
     }
 
     // ---------------- Xử lý thí sinh ----------------
@@ -568,8 +735,10 @@ public sealed class RoomService : IDisposable
         c.RevokedAt = DateTime.Now.ToString("HH:mm");
         c.Sheet.Revoked = true;
         c.Conn?.Send(Msg.Notice, new { kind = "me", text = "Bài thi của bạn đã bị thu do vi phạm quy chế. Kết quả thi bị huỷ." });
-        c.Conn?.Send(Msg.Collect);
+        c.CollectDeadline = null;
         c.Status = CandStatus.Revoked;
+        SendResult(c);   // máy thí sinh khoá bài và chuyển sang màn hình chờ
+        SaveState();
         Log("ĐÌNH CHỈ", c.Machine, $"bị thu bài · kết quả thi bị huỷ · {c.FullName}");
     }
 
@@ -577,6 +746,9 @@ public sealed class RoomService : IDisposable
     {
         if (!c.IsActive) return;
         c.MoveApproved = true;
+        c.CollectDeadline = null;
+        // Token của máy cũ hết hiệu lực ngay khi duyệt chuyển máy; máy mới sẽ được cấp token mới lúc đăng nhập.
+        c.Token = SessionRules.NewToken();
         if (c.Status == CandStatus.Lost) c.Status = CandStatus.Moving;
         else
         {
@@ -652,18 +824,19 @@ public sealed class RoomService : IDisposable
         Changed?.Invoke();
     }
 
-    // Ghi sao lưu ở luồng nền để không làm giật giao diện; một lần ghi tại một thời điểm.
-    private readonly object _diskLock = new();
+    // Sao lưu ghi ở luồng nền qua OrderedWriter: các bản lưu xếp hàng đúng thứ tự (bản cũ không bao giờ đè bản mới),
+    // mỗi bản ghi ra file tạm rồi mới thay file chính (không để lại file ghi dở khi mất điện).
+    private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 
     public void Backup()
     {
-        if (BackupDir.Length == 0) { SaveState(); return; }
-        string? json = null;
-        try { json = JsonSerializer.Serialize(Candidates.Select(c => c.Sheet).ToList(), new JsonSerializerOptions { WriteIndented = true }); }
+        if (BackupDir.Length == 0) return;
+        try
+        {
+            var json = JsonSerializer.Serialize(Candidates.Select(c => c.Sheet).ToList(), Indented);
+            _writer.Write(Path.Combine(BackupDir, "bai-lam.json"), json);
+        }
         catch { }
-        var dir = BackupDir;
-        if (json != null)
-            Task.Run(() => { try { lock (_diskLock) File.WriteAllText(Path.Combine(dir, "bai-lam.json"), json); } catch { } });
         SaveState();
     }
 
@@ -672,18 +845,19 @@ public sealed class RoomService : IDisposable
     public static string BackupRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "iTest-Server", "SaoLuu");
 
     /// <summary>
-    /// Ghi trạng thái phòng thi (ghi file tạm rồi đổi tên để không để lại file hỏng khi mất điện).
-    /// Mặc định ghi ở luồng nền để không làm giật giao diện; đặt <paramref name="sync"/>=true khi cần ghi xong ngay (lúc đóng phòng).
+    /// Ghi trạng thái phòng thi. Ảnh chụp dữ liệu được dựng ngay trên luồng giao diện; việc ghi đĩa mặc định chạy nền, theo thứ tự.
+    /// Đặt <paramref name="sync"/>=true khi cần ghi xong ngay (lúc đóng phòng). Kết quả true khi bản này đã nằm trên đĩa.
     /// </summary>
-    public void SaveState(bool closed = false, bool sync = false)
+    public Task<bool> SaveState(bool closed = false, bool sync = false)
     {
         string json; var dir = BackupDir;
         try
         {
-            if (BackupDir.Length == 0) return;
+            if (BackupDir.Length == 0) return Task.FromResult(true);
             var st = new RoomState
             {
                 Department = Department, School = School, Room = Room, Proctor = Proctor, RoomPin = RoomPin, PackagePath = PackagePath, BackupDir = BackupDir,
+                ExamHash = ExamHash,
                 Phase = Phase, SecondsLeft = SecondsLeft, SubmitWindowMinutes = SubmitWindowMinutes, ShowScore = ShowScore,
                 StartedAt = StartedAt, EndedAt = EndedAt, Exported = Exported, Closed = closed, SavedAt = DateTime.Now,
                 Candidates = Candidates.Select(c => new CandidateState
@@ -694,24 +868,25 @@ public sealed class RoomService : IDisposable
             };
             json = JsonSerializer.Serialize(st, ExamPackage.Json);
         }
-        catch { return; }
-
-        void Write()
-        {
-            try
-            {
-                lock (_diskLock)
-                {
-                    var path = Path.Combine(dir, StateFile);
-                    var tmp = path + ".tmp";
-                    File.WriteAllText(tmp, json);
-                    File.Move(tmp, path, overwrite: true);
-                }
-            }
-            catch { }
-        }
-        if (sync) Write(); else Task.Run(Write);
+        catch { return Task.FromResult(false); }
+        var path = Path.Combine(dir, StateFile);
+        return sync ? Task.FromResult(_writer.WriteNow(path, json)) : _writer.Write(path, json);
     }
+
+    /// <summary>
+    /// Bản dữ liệu riêng để xuất kết quả: sao chép toàn bộ bài làm và trạng thái tại thời điểm gọi (trên luồng giao diện),
+    /// nên việc xuất ở luồng nền không đọc dữ liệu phòng thi đang thay đổi.
+    /// </summary>
+    public ExportData Snapshot() => new()
+    {
+        Exam = Exam, Layouts = Layouts.ToList(), Department = Department, School = School, Room = Room, Proctor = Proctor,
+        PackagePath = PackagePath, BackupDir = BackupDir, StartedAt = StartedAt, EndedAt = EndedAt,
+        Candidates = Candidates.Select(c => new ExportCand
+        {
+            Sheet = JsonSerializer.Deserialize<AnswerSheet>(JsonSerializer.Serialize(c.Sheet, ExamPackage.Json), ExamPackage.Json) ?? new AnswerSheet(),
+            Status = c.Status, StatusText = c.StatusText, Discipline = c.Discipline, WarnedAt = c.WarnedAt, RevokedAt = c.RevokedAt, Machine = c.Machine
+        }).ToList()
+    };
 
     /// <summary>Tìm phòng thi bị dừng đột ngột (chưa đóng phòng) trong 24 giờ qua, mới nhất trước.</summary>
     public static RoomState? FindUnclosed()
@@ -743,7 +918,7 @@ public sealed class RoomService : IDisposable
         try
         {
             st.Closed = true;
-            File.WriteAllText(Path.Combine(st.BackupDir, StateFile), JsonSerializer.Serialize(st, ExamPackage.Json));
+            SafeFile.WriteAllText(Path.Combine(st.BackupDir, StateFile), JsonSerializer.Serialize(st, ExamPackage.Json));
         }
         catch { }
     }
@@ -758,6 +933,9 @@ public sealed class RoomService : IDisposable
         var codes = Layouts.Select(l => l.Code).ToHashSet();
         if (st.Candidates.Any(c => c.Sheet.Code.Length > 0 && (!codes.Contains(c.Sheet.Code) || c.TotalQuestions != Exam.Questions.Count)))
             throw new InvalidDataException("Bộ đề vừa chọn không khớp với phòng thi cần khôi phục (khác số câu hoặc số mã đề). Hãy chọn đúng file bộ đề đã dùng.");
+        // Cùng số câu, cùng số mã đề nhưng nội dung khác (đề khác môn, bản đề đã sửa…): dấu vân tay SHA-256 sẽ khác.
+        if (!string.IsNullOrEmpty(st.ExamHash) && !string.Equals(st.ExamHash, ExamHash, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Bộ đề vừa chọn có nội dung khác với bộ đề đã dùng trong phòng thi cần khôi phục (dấu vân tay không khớp). Hãy chọn đúng file bộ đề đã dùng.");
         Department = st.Department; School = st.School; Room = st.Room; Proctor = st.Proctor; RoomPin = st.RoomPin;
         SubmitWindowMinutes = st.SubmitWindowMinutes; ShowScore = st.ShowScore;
         _clientExams.Clear();

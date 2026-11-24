@@ -24,6 +24,11 @@ public sealed class Candidate : INotifyPropertyChanged
     public bool MoveApproved { get; set; }
     public bool EditRequested { get; set; }
     public int TotalQuestions { get; set; }
+    /// <summary>Máy chủ đang thu bài của thí sinh này: chờ bản bài làm cuối cùng từ máy thí sinh tới hạn này (giờ UTC).</summary>
+    public DateTime? CollectDeadline { get; set; }
+    public string CollectText { get; set; } = "";
+    /// <summary>Đã ghi nhật ký về dữ liệu bài làm sai định dạng từ máy này (chỉ ghi một lần).</summary>
+    public bool BadDataLogged { get; set; }
 
     private CandStatus _status = CandStatus.Connected;
     public CandStatus Status { get => _status; set { _status = value; RefreshAll(); } }
@@ -50,7 +55,7 @@ public sealed class Candidate : INotifyPropertyChanged
     {
         CandStatus.Connected => "Đã kết nối · chưa đăng ký",
         CandStatus.Waiting => "Chờ phát đề",
-        CandStatus.Doing => $"Đang làm bài ({Answered}/{TotalQuestions})",
+        CandStatus.Doing => CollectDeadline != null ? $"Đang thu bài ({Answered}/{TotalQuestions})" : $"Đang làm bài ({Answered}/{TotalQuestions})",
         CandStatus.Done => $"Đã nộp bài ({Answered}/{TotalQuestions})",
         CandStatus.Lost => $"Mất kết nối ({Answered}/{TotalQuestions})",
         CandStatus.Moving => "Đang chuyển máy",
@@ -95,3 +100,38 @@ public sealed class Candidate : INotifyPropertyChanged
 
 /// <summary>Một dòng trong "Hoạt động trực tiếp".</summary>
 public sealed record FeedItem(string At, string Tag, string Pc, string Text, Brush TagBg, Brush TagFg);
+
+/// <summary>Một thí sinh trong bản dữ liệu xuất kết quả (bản sao, không còn gắn với phòng thi đang chạy).</summary>
+public sealed class ExportCand
+{
+    public AnswerSheet Sheet { get; init; } = new();
+    public CandStatus Status { get; init; }
+    public string StatusText { get; init; } = "";
+    public string Discipline { get; init; } = "—";
+    public string? WarnedAt { get; init; }
+    public string? RevokedAt { get; init; }
+    public string Machine { get; init; } = "";
+    public string Sbd => Sheet.Candidate.Sbd;
+    public string FullName => Sheet.Candidate.FullName;
+    public string BirthDate => Sheet.Candidate.BirthDate;
+    public string ClassName => Sheet.Candidate.ClassName;
+    public string Code => Sheet.Code;
+    /// <summary>Bài đã nộp và không bị huỷ: chỉ những bài này mới có điểm trong các file xuất.</summary>
+    public bool HasScore => Status == CandStatus.Done && !Sheet.Revoked;
+}
+
+/// <summary>Bản dữ liệu riêng của phòng thi dùng cho việc xuất kết quả ở luồng nền.</summary>
+public sealed class ExportData
+{
+    public ExamSet Exam { get; init; } = new();
+    public List<CodeLayout> Layouts { get; init; } = new();
+    public string Department { get; init; } = "";
+    public string School { get; init; } = "";
+    public string Room { get; init; } = "";
+    public string Proctor { get; init; } = "";
+    public string PackagePath { get; init; } = "";
+    public string BackupDir { get; init; } = "";
+    public DateTime? StartedAt { get; init; }
+    public DateTime? EndedAt { get; init; }
+    public List<ExportCand> Candidates { get; init; } = new();
+}

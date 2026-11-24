@@ -250,6 +250,8 @@ public sealed class ClientQuestion
 public sealed class ClientExam
 {
     public string Code { get; set; } = "101";
+    /// <summary>Dấu vân tay bộ đề (do máy chủ gắn): máy thí sinh dùng để không nạp nhầm bản lưu tạm của bài thi khác.</summary>
+    public string Fingerprint { get; set; } = "";
     public string Department { get; set; } = "";    // Sở GD&ĐT (từ Server)
     public string School { get; set; } = "";        // Trường (từ Server)
     public string ExamName { get; set; } = "";

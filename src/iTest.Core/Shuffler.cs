@@ -9,8 +9,24 @@ public sealed class CodeLayout
     /// <summary>Id câu gốc → hoán vị: vị trí hiển thị k chứa phương án (hoặc ý) gốc Perm[k].</summary>
     public Dictionary<int, int[]> Perm { get; set; } = new();
 
-    public int[] PermOf(Question q) =>
-        Perm.TryGetValue(q.Id, out var p) && p.Length == q.Options.Count ? p : Enumerable.Range(0, q.Options.Count).ToArray();
+    /// <summary>Hoán vị phương án của câu; dữ liệu hoán vị thiếu, sai độ dài hoặc không phải một hoán vị thì dùng thứ tự gốc.</summary>
+    public int[] PermOf(Question q)
+    {
+        int n = q.Options.Count;
+        if (Perm.TryGetValue(q.Id, out var p) && p != null && p.Length == n && IsPermutation(p)) return p;
+        return Enumerable.Range(0, n).ToArray();
+    }
+
+    private static bool IsPermutation(int[] p)
+    {
+        var seen = new bool[p.Length];
+        foreach (var v in p)
+        {
+            if (v < 0 || v >= p.Length || seen[v]) return false;
+            seen[v] = true;
+        }
+        return true;
+    }
 }
 
 public static class Shuffler
@@ -124,24 +140,32 @@ public static class Scoring
             case QuestionType.MultipleChoice:
             case QuestionType.YesNo:
                 if (!sheet.Choices.TryGetValue(no, out var shown) || shown < 0 || shown >= perm.Length) return (0, false, false);
+                if (q.Correct < 0 || q.Correct >= perm.Length) return (0, false, true);   // đề chưa có đáp án hợp lệ: không ai được điểm câu này
                 return perm[shown] == q.Correct ? (q.Points, true, true) : (0, false, true);
 
             case QuestionType.MultiSelect:
-                if (!sheet.Multi.TryGetValue(no, out var picked) || picked.Count == 0) return (0, false, false);
-                var orig = picked.Where(i => i >= 0 && i < perm.Length).Select(i => perm[i]).ToHashSet();
+                if (!sheet.Multi.TryGetValue(no, out var picked) || picked == null || picked.Count == 0) return (0, false, false);
+                // Có phương án ngoài phạm vi: bài làm sai định dạng, không được tính điểm (không lặng lẽ bỏ qua phần sai).
+                if (picked.Any(i => i < 0 || i >= perm.Length)) return (0, false, true);
+                if (q.Corrects.Count == 0) return (0, false, true);
+                var orig = picked.Select(i => perm[i]).ToHashSet();
                 return orig.SetEquals(q.Corrects) ? (q.Points, true, true) : (0, false, true);
 
             case QuestionType.TrueFalse:
-                if (!sheet.Tf.TryGetValue(no, out var tf) || tf.Count == 0) return (0, false, false);
-                int ok = 0;
+                if (!sheet.Tf.TryGetValue(no, out var tf) || tf == null || tf.Count == 0) return (0, false, false);
+                // Chỉ chấm khi đáp án đủ cho mọi ý; ý ngoài phạm vi bị bỏ qua và không bao giờ được tính là đúng.
+                int total = q.Options.Count;
+                if (total == 0 || q.TfKey.Count != total) return (0, false, true);
+                int ok = 0, valid = 0;
                 foreach (var (idx, val) in tf)
                 {
                     if (idx < 0 || idx >= perm.Length) continue;
-                    int o = perm[idx];
-                    if (o < q.TfKey.Count && q.TfKey[o] == val) ok++;
+                    valid++;
+                    if (q.TfKey[perm[idx]] == val) ok++;
                 }
-                var frac = TrueFalseFraction(ok, q.Options.Count);
-                return (Math.Round(q.Points * frac, 2), ok == q.Options.Count, true);
+                if (valid == 0) return (0, false, false);
+                var frac = TrueFalseFraction(ok, total);
+                return (Math.Round(q.Points * frac, 2), ok == total, true);
 
             case QuestionType.ShortAnswer:
                 if (!sheet.Short.TryGetValue(no, out var ans) || string.IsNullOrWhiteSpace(ans)) return (0, false, false);
@@ -157,12 +181,12 @@ public static class Scoring
     /// <summary>Chấm toàn bộ phần khách quan của một bài làm.</summary>
     public static McResult GradeObjective(ExamSet exam, CodeLayout layout, AnswerSheet sheet)
     {
-        var byId = exam.Questions.ToDictionary(q => q.Id);
+        var byId = new Dictionary<int, Question>();
+        foreach (var x in exam.Questions) byId.TryAdd(x.Id, x);
         int right = 0, wrong = 0, blank = 0; double score = 0;
         for (int i = 0; i < layout.Order.Count; i++)
         {
-            var q = byId[layout.Order[i]];
-            if (!q.Type.IsObjective()) continue;
+            if (!byId.TryGetValue(layout.Order[i], out var q) || !q.Type.IsObjective()) continue;
             var (s, full, answered) = GradeOne(q, layout, sheet, i + 1);
             score += s;
             if (!answered) blank++;
@@ -205,6 +229,7 @@ public static class Scoring
         var wrongTexts = objective.Where(q => q.Type == QuestionType.ShortAnswer).ToDictionary(q => q.Id, _ => new Dictionary<string, int>());
         var byCode = layouts.ToDictionary(l => l.Code);
         var byId = exam.Questions.ToDictionary(q => q.Id);
+        // Chỉ thống kê bài đã chốt (đã nộp, không bị huỷ) để bài bỏ dở không làm lệch tỉ lệ.
         foreach (var s in sheets.Where(s => !s.Revoked))
         {
             if (!byCode.TryGetValue(s.Code, out var layout)) continue;

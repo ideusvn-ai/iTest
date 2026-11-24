@@ -21,7 +21,7 @@ public static class Msg
     public const string Register = "register";    // CandidateInfo
     public const string Answer = "answer";        // no, choice
     public const string Essay = "essay";          // no, text
-    public const string Submit = "submit";
+    public const string Submit = "submit";        // auto, final: FinalAnswers (toàn bộ bài làm cuối cùng)
     public const string Focus = "focus";          // lost: bool, reason
     public const string AnswerEx = "answerEx";    // AnswerEx: câu nhiều đáp án / Đúng-Sai / trả lời ngắn
     public const string Cheat = "cheat";          // kind, detail: dấu hiệu gian lận phát hiện trên máy thí sinh
@@ -32,12 +32,13 @@ public static class Msg
     public const string Registered = "registered";
     public const string Reject = "reject";        // reason
     public const string EditRequest = "editRequest"; // reason
-    public const string Exam = "exam";            // ClientExam, secondsLeft, submitWindow
+    public const string Exam = "exam";            // ClientExam, secondsLeft, submitWindow, paused
+    public const string SubmitDenied = "submitDenied"; // secondsLeft, paused, reason: chưa tới thời gian được nộp, làm bài tiếp
     public const string Resume = "resume";        // choices, essays
     public const string Time = "time";            // secondsLeft, paused
     public const string Notice = "notice";        // kind (all|me), text
     public const string Collect = "collect";      // máy chủ thu bài
-    public const string Result = "result";        // right, wrong, blank, score, showScore
+    public const string Result = "result";        // showScore; chỉ khi showScore mới kèm right, wrong, blank, score. Là lời xác nhận "máy chủ đã lưu bài".
     public const string Release = "release";      // cho phép thoát ứng dụng
 }
 
@@ -49,6 +50,16 @@ public sealed class AnswerEx
     public List<int> Choices { get; set; } = new();
     public Dictionary<int, bool> Tf { get; set; } = new();
     public string Text { get; set; } = "";
+}
+
+/// <summary>Toàn bộ bài làm cuối cùng, gửi kèm tin nộp bài để máy chủ không bỏ sót chữ thí sinh vừa gõ.</summary>
+public sealed class FinalAnswers
+{
+    public Dictionary<int, int> Choices { get; set; } = new();
+    public Dictionary<int, string> Essays { get; set; } = new();
+    public Dictionary<int, List<int>> Multi { get; set; } = new();
+    public Dictionary<int, Dictionary<int, bool>> Tf { get; set; } = new();
+    public Dictionary<int, string> ShortAns { get; set; } = new();
 }
 
 /// <summary>Gói tin quảng bá phòng thi qua UDP.</summary>
@@ -88,6 +99,17 @@ public sealed class Connection : IDisposable
     private AesGcm? _aes;
     private long _sendCounter;
     private long _recvCounter;
+    // Giới hạn hàng đợi gửi: máy bên kia treo (không đọc) thì đóng kết nối thay vì để bộ nhớ phình mãi.
+    private const int MaxQueuedMessages = 5000;
+    private const long MaxQueuedBytes = 256L * 1024 * 1024;
+    private int _queued;
+    private long _queuedBytes;
+    private long _lastRxTick = Environment.TickCount64;
+    private System.Threading.Timer? _idleTimer;
+    /// <summary>Thời gian tối đa để ghi xong một khung tin (cộng thêm theo kích thước khung). Quá hạn thì đóng kết nối.</summary>
+    public TimeSpan WriteTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    /// <summary>Không nhận được khung tin nào trong khoảng này thì đóng kết nối (đặt trước khi gọi Start; mặc định: không giới hạn).</summary>
+    public TimeSpan IdleTimeout { get; set; } = Timeout.InfiniteTimeSpan;
     public string RemoteAddress { get; }
     public event Action<Connection, JsonObject>? Received;
     public event Action<Connection>? Closed;
@@ -127,6 +149,13 @@ public sealed class Connection : IDisposable
             await hs.ConfigureAwait(false);
             _ready.TrySetResult(true);
             _ = Task.Run(WriteLoop);
+            Volatile.Write(ref _lastRxTick, Environment.TickCount64);
+            if (IdleTimeout != Timeout.InfiniteTimeSpan && IdleTimeout > TimeSpan.Zero)
+            {
+                var idleMs = (long)IdleTimeout.TotalMilliseconds;
+                _idleTimer = new System.Threading.Timer(_ => { if (Environment.TickCount64 - Volatile.Read(ref _lastRxTick) > idleMs) Close(); }, null, 2000, 2000);
+                if (Volatile.Read(ref _closed) == 1) _idleTimer.Dispose();
+            }
             var lenBuf = new byte[4];
             while (true)
             {
@@ -135,7 +164,9 @@ public sealed class Connection : IDisposable
                 if (len < 28 || len > 64 * 1024 * 1024) throw new InvalidDataException("Khung tin không hợp lệ");
                 var buf = new byte[len];
                 await ReadExact(buf, len).ConfigureAwait(false);
-                if (JsonNode.Parse(Open(buf)) is JsonObject node) Received?.Invoke(this, node);
+                var plain = Open(buf);
+                Volatile.Write(ref _lastRxTick, Environment.TickCount64);
+                if (JsonNode.Parse(plain) is JsonObject node) Received?.Invoke(this, node);
             }
         }
         catch { /* mất kết nối hoặc khung tin bị sửa */ }
@@ -208,27 +239,43 @@ public sealed class Connection : IDisposable
         var obj = payload == null ? new JsonObject() : (JsonSerializer.SerializeToNode(payload, ExamPackage.Json) as JsonObject ?? new JsonObject());
         obj["t"] = type;
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_outbox.Writer.TryWrite((Encoding.UTF8.GetBytes(obj.ToJsonString()), done))) done.TrySetResult();
+        var bytes = Encoding.UTF8.GetBytes(obj.ToJsonString());
+        if (Interlocked.Increment(ref _queued) > MaxQueuedMessages || Interlocked.Add(ref _queuedBytes, bytes.Length) > MaxQueuedBytes)
+        {
+            Close();   // bên kia không nhận kịp quá lâu: coi như mất kết nối, bên gọi sẽ kết nối lại
+            return Task.CompletedTask;
+        }
+        if (!_outbox.Writer.TryWrite((bytes, done))) done.TrySetResult();
+        // Kết nối vừa đóng xen giữa: bảo đảm không tin nào bị treo chờ mãi.
+        if (Volatile.Read(ref _closed) == 1) { while (_outbox.Reader.TryRead(out var x)) x.done.TrySetResult(); done.TrySetResult(); }
         return done.Task;
     }
 
     private async Task WriteLoop()
     {
+        TaskCompletionSource? current = null;   // tin đang ghi dở: nếu ghi lỗi vẫn phải báo xong để bên gọi không chờ mãi
         try
         {
             await foreach (var (plain, done) in _outbox.Reader.ReadAllAsync().ConfigureAwait(false))
             {
+                current = done;
+                Interlocked.Decrement(ref _queued);
+                Interlocked.Add(ref _queuedBytes, -plain.Length);
                 var frame = new byte[4 + 28 + plain.Length];
                 BitConverter.GetBytes(28 + plain.Length).CopyTo(frame, 0);
                 Seal(frame, plain);
-                await _stream.WriteAsync(frame).ConfigureAwait(false);
-                if (_outbox.Reader.Count == 0) await _stream.FlushAsync().ConfigureAwait(false);
+                // Máy bên kia treo hoặc rút dây mạng: việc ghi không được chờ vô hạn (tối thiểu ~50 KB/giây cho khung lớn).
+                using var cts = new CancellationTokenSource(WriteTimeout + TimeSpan.FromSeconds(frame.Length / 50_000));
+                await _stream.WriteAsync(frame, cts.Token).ConfigureAwait(false);
+                if (_outbox.Reader.Count == 0) await _stream.FlushAsync(cts.Token).ConfigureAwait(false);
                 done.TrySetResult();
             }
         }
-        catch { Close(); }
+        catch { }
         finally
         {
+            Close();
+            current?.TrySetResult();
             while (_outbox.Reader.TryRead(out var x)) x.done.TrySetResult();
         }
     }
@@ -247,6 +294,7 @@ public sealed class Connection : IDisposable
     public void Close()
     {
         if (Interlocked.Exchange(ref _closed, 1) == 1) return;
+        try { _idleTimer?.Dispose(); } catch { }
         try { _client.Close(); } catch { }
         _outbox.Writer.TryComplete();
         while (_outbox.Reader.TryRead(out var x)) x.done.TrySetResult();
