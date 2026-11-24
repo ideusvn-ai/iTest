@@ -1,3 +1,4 @@
+using System.IO;
 using System.IO.Compression;
 using ClosedXML.Excel;
 using ITest.Core;
@@ -177,7 +178,7 @@ public class ExportTests
             // Dữ liệu hỏng (hai câu trùng mã) làm việc xuất thất bại: gói cũ phải còn nguyên, không sót file tạm.
             var broken = Data(dir, Cand("001", "Nguyễn Văn An", "01/02/2009", "10A1", 2));
             broken.Exam.Questions[1].Id = 1;
-            Assert.ThrowsAny<Exception>(() => Exporter.ExportZip(broken, zip));
+            Assert.ThrowsAny<Exception>(() => { Exporter.ExportZip(broken, zip); });
             Assert.Equal("gói cũ", File.ReadAllText(zip));
             Assert.Empty(Directory.GetFiles(dir, "*.tmp"));
 
