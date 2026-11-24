@@ -11,6 +11,7 @@ permissions:
   contents: write
   pages: write
   id-token: write
+  actions: read   # bước đăng trang web cần đọc danh sách artifact của lần chạy (bắt buộc với repo riêng tư)
 
 env:
   # Đặt secret CODESIGN_PFX_BASE64 (file .pfx mã hoá base64) và CODESIGN_PASSWORD để tự động ký số.
