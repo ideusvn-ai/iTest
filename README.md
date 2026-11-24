@@ -12,11 +12,12 @@ Bộ ba ứng dụng Windows chạy trong mạng LAN, không cần Internet:
 
 1. Tạo một repository mới trên GitHub (ví dụ `itest`) và đẩy toàn bộ thư mục này lên nhánh `main`.
 2. Vào tab **Actions**: workflow **Build iTest** tự chạy. Khoảng 5–10 phút sau, mở lần chạy đó và tải mục
-   **Artifacts → iTest-Setup-1.0.0**, bên trong có `iTest-Setup.exe`, `iTest-Server-Setup.exe`, `iTest-Editor-Setup.exe`.
-3. Để phát hành bản chính thức, tạo tag phiên bản rồi đẩy lên:
+   **Artifacts → iTest-Setup-<phiên bản>**, bên trong có `iTest-Setup.exe`, `iTest-Server-Setup.exe`, `iTest-Editor-Setup.exe`.
+3. Số phiên bản khai báo ở **một nơi duy nhất**: thẻ `<Version>` trong `Directory.Build.props`. Để phát hành bản chính thức,
+   sửa số đó (nếu cần) rồi tạo tag **trùng số phiên bản** và đẩy lên (tag khác số phiên bản sẽ bị workflow từ chối):
    ```
-   git tag v1.0.0
-   git push origin v1.0.0
+   git tag v1.1.0
+   git push origin v1.1.0
    ```
    Workflow sẽ tạo **Release** đính kèm 3 file Setup. Đường dẫn tải cố định dạng
    `https://github.com/<tài-khoản>/<repo>/releases/latest/download/iTest-Setup.exe`.
@@ -104,8 +105,15 @@ Mỗi máy giả lập (LT001…) vào phòng, làm bài ngẫu nhiên mọi lo�
 và nộp khi giám thị thu bài. Màn hình in số máy kết nối, số câu trả lời đã gửi, độ trễ ping trung bình/lớn nhất.
 
 ## Kiểm thử tự động
-`dotnet test tests/iTest.Core.Tests` — kiểm tra chia điểm, trộn đề, chấm mọi loại câu, gói `.itz` (mật khẩu, chống sửa),
-bộ gõ TELEX/VNI và kết nối mã hoá. GitHub Actions chạy bộ kiểm thử trước mỗi lần build; lỗi kiểm thử sẽ dừng việc tạo bộ cài.
+- `dotnet test tests/iTest.Core.Tests` — phần lõi: chia điểm, trộn đề, chấm mọi loại câu, kiểm tra câu trả lời nhận từ máy thí sinh,
+  quy định thời gian nộp và chống chiếm phiên, gói `.itz` (mật khẩu, chống sửa, kiểm tra cấu trúc, dấu vân tay), ghi file an toàn theo thứ tự,
+  bộ gõ TELEX/VNI và kết nối mã hoá (giới hạn hàng đợi, timeout).
+- `dotnet test tests/iTest.Windows.Tests` — chỉ chạy trên Windows: nhập câu hỏi từ file Word thật, xuất điểm (không ghép nhầm học sinh trùng tên,
+  tên sheet không trùng), gói kết quả ZIP, và **một phòng thi chạy thật** với máy thí sinh giả: nộp sớm bị từ chối, máy lạ không chiếm được phiên,
+  thu bài chờ bản cuối, xác nhận sau khi lưu, bài đã chốt không bị ghi đè, điểm chỉ gửi khi được phép.
+
+GitHub Actions chạy cả hai bộ trước mỗi lần build; lỗi kiểm thử sẽ dừng việc tạo bộ cài. Báo cáo kiểm thử (`.trx`) được lưu ở
+**Artifacts → BaoCao-KiemThu** của mỗi lần chạy.
 
 ## Ký số các file .exe
 1. Có chứng thư ký mã (mua chứng thư OV/EV, hoặc dùng Azure Trusted Signing) dạng `.pfx`.
@@ -123,17 +131,33 @@ bộ gõ TELEX/VNI và kết nối mã hoá. GitHub Actions chạy bộ kiểm t
   mọi tin nhắn mã hoá AES-256-GCM, có bộ đếm chống phát lại. iTest-Server sinh **mã phòng thi 4 số** (hiển thị trên bảng
   điều khiển); giám thị đọc cho cả phòng, thí sinh nhập khi vào phòng. Mã phòng được trộn vào khoá phiên, nên **máy chủ giả
   không có mã phòng sẽ không lừa được máy thí sinh**, và máy nhập sai mã không vào được. Người nghe lén không đọc được đề/bài làm.
-- **Chống cướp phiên**: khi đăng ký, mỗi máy thí sinh được máy chủ cấp một token phiên ngẫu nhiên. Chỉ máy giữ đúng token mới
-  giành lại được phiên khi rớt mạng; máy khác khai trùng số báo danh sẽ bị từ chối (trừ khi giám thị duyệt chuyển máy).
+- **Chống chiếm phiên**: khi đăng ký, mỗi máy thí sinh được máy chủ cấp một token phiên ngẫu nhiên (lưu trên máy đó). Số báo danh đã có
+  bài làm thì **chỉ máy giữ đúng token** mới vào lại được — kể cả khi phiên đang “mất kết nối”. Máy khác, hoặc máy đã mất token, phải được
+  giám thị bấm **Chuyển máy**; khi đó token cũ hết hiệu lực và máy mới nhận token mới.
+- **Máy chủ không tin máy thí sinh**: mọi câu trả lời được đối chiếu với đề (đúng số câu, đúng loại câu, phương án trong phạm vi, độ dài có giới hạn);
+  quy định “chỉ nộp trong N phút cuối” do máy chủ kiểm tra theo đồng hồ của mình; khi giám thị chưa cho xem điểm thì **không con số nào**
+  (điểm, số câu đúng/sai) được gửi xuống máy thí sinh.
+- **Nộp bài**: tin nộp mang theo toàn bộ bài làm cuối cùng. Khi thu bài, máy chủ chờ bản cuối của từng máy tối đa 10 giây. Máy thí sinh chỉ
+  báo “Đã nộp bài thành công” sau khi máy chủ xác nhận **đã ghi bài xuống đĩa**; bài đã chốt không bị các tin gửi lại ghi đè.
+- **Bộ đề `.itz` được kiểm tra khi mở và khi đóng gói**: cấu trúc, mã câu trùng, điểm không hợp lệ, đáp án ngoài phạm vi, tên và kích thước
+  file ảnh/âm thanh (tối đa 25 MB mỗi file, 200 MB cả bộ).
 - File `.itz` được mã hoá **AES-256-GCM**, khoá sinh từ mật khẩu bằng PBKDF2-SHA256 (200.000 vòng); file bị sửa sẽ không mở được.
 - Chế độ thi: toàn màn hình, luôn nằm trên cùng, chặn phím Windows, Alt+Tab, Alt+Esc, Ctrl+Esc, Alt+F4 và tạm tắt Task Manager.
   **Ctrl+Alt+Del không thể chặn** bằng phần mềm thường; mọi lần cửa sổ mất tiêu điểm đều được báo về máy chủ.
 - Bài làm được lưu ở máy chủ sau mỗi thao tác, sao lưu mỗi 30 giây vào `Documents\iTest-Server\SaoLuu\`, và lưu tạm trên máy thí sinh.
+  Mọi bản lưu được ghi ra file tạm rồi mới thay file chính, theo đúng thứ tự (bản cũ không đè bản mới, không có file ghi dở khi mất điện).
 
 ## Khi có sự cố trong buổi thi
 - **Máy thí sinh mất mạng**: máy tự kết nối lại ở mọi trạng thái (phòng chờ, đang làm bài, đã nộp). Bài làm trên máy thí sinh là bản mới nhất
   và được gửi lại đầy đủ khi có mạng; máy chủ bù giờ cho thời gian mất kết nối. Hết giờ đúng lúc đang mất mạng thì máy chờ thêm tối đa 2 phút rồi mới tự nộp.
-- **Đã nộp bài nhưng máy chủ không còn liên lạc được quá 1 phút**: máy thí sinh tự mở khoá và hiện nút *Thoát ứng dụng* (không bị khoá vô thời hạn).
+- **Máy thí sinh bị khởi động lại** (mất điện, treo máy): mở lại iTest, vào đúng phòng thi và đăng ký lại đúng số báo danh — máy dùng token
+  đã lưu để nhận lại phiên, bài làm và số lượt nghe đã dùng. Nếu lúc đó bài đã nộp nhưng chưa được xác nhận, bài được gửi lại ngay.
+  Nếu máy mất cả token (cài lại máy, đổi tài khoản Windows) hoặc phải đổi sang máy khác, giám thị bấm **Chuyển máy**.
+- **Nộp bài lúc máy chủ chưa cho nộp** (đồng hồ hai máy lệch, hoặc máy tự nộp sau khi mất mạng lâu): máy chủ từ chối, bài tự mở lại để làm tiếp với giờ đúng.
+- **Đã nộp bài nhưng máy chủ không còn liên lạc được**: sau 1 phút (bài đã được xác nhận) hoặc 5 phút (bài chưa được xác nhận, còn giữ trên máy)
+  máy thí sinh tự mở khoá và hiện nút *Thoát ứng dụng* (không bị khoá vô thời hạn). Bài chưa xác nhận sẽ được gửi lại khi mở iTest và vào lại phòng.
+- **Khôi phục phòng thi trên máy chủ**: phải chọn đúng file bộ đề đã dùng — máy chủ so dấu vân tay SHA-256 của nội dung đề và ảnh/âm thanh,
+  nên bộ đề khác có cùng số câu sẽ bị từ chối.
 - **iTest bị tắt đột ngột khi đang khoá máy** (mất điện, treo máy): lần mở iTest kế tiếp tự bật lại Task Manager.
 - **Lỗi ngoài dự kiến**: cả ba ứng dụng ghi lỗi vào `%LocalAppData%\<tên ứng dụng>\loi.log` và chạy tiếp thay vì đóng sập. Gửi file này khi cần hỗ trợ.
 - **Bộ gõ tiếng Việt** có sẵn (TELEX/VNI) có thể **tắt** — trong Editor ở góc trên phải, trên máy thí sinh ở nút ⚙ — khi soạn/làm bài tiếng Anh
