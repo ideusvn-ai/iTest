@@ -30,7 +30,7 @@ Bộ ba ứng dụng Windows chạy trong mạng LAN, không cần Internet:
 Cần: Windows 10/11, [.NET 11 SDK](https://dotnet.microsoft.com/download/dotnet/11.0), [Inno Setup 6](https://jrsoftware.org/isdl.php).
 
 ```powershell
-$p = @('-c','Release','-r','win-x64','--self-contained','true','-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true')
+$p = @('-c','Release','-r','win-x64','--self-contained','true')   # không dùng PublishSingleFile: WPF trên .NET 11 không mở được khi gộp một-file
 dotnet publish src/iTest.Client/iTest.Client.csproj @p -o publish/iTest
 dotnet publish src/iTest.Server/iTest.Server.csproj @p -o publish/iTest-Server
 dotnet publish src/iTest.Editor/iTest.Editor.csproj @p -o publish/iTest-Editor
