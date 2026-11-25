@@ -83,6 +83,29 @@ jobs:
             Write-Host ("{0}: {1:N1} MB" -f $exe, ((Get-Item $exe).Length / 1MB))
           }
 
+      - name: Chạy thử các file .exe vừa đóng gói
+        shell: pwsh
+        run: |
+          # Mở thật từng ứng dụng (bản một-file, tự chứa runtime) như trên máy người dùng: phải còn chạy và có cửa sổ sau 15 giây.
+          $apps = [ordered]@{ 'iTest' = 'publish/iTest/iTest.exe'; 'iTest-Server' = 'publish/iTest-Server/iTest-Server.exe'; 'iTest-Editor' = 'publish/iTest-Editor/iTest-Editor.exe' }
+          $failed = @()
+          foreach ($name in $apps.Keys) {
+            $since = Get-Date
+            $p = Start-Process -FilePath $apps[$name] -PassThru
+            Start-Sleep -Seconds 15
+            $p.Refresh()
+            $ok = (-not $p.HasExited) -and ($p.MainWindowHandle -ne 0)
+            Write-Host "== $name: đã thoát=$($p.HasExited) · cửa sổ=$($p.MainWindowHandle) · tiêu đề='$($p.MainWindowTitle)'"
+            if ($p.HasExited) { Write-Host "   mã thoát: $($p.ExitCode)" } else { Stop-Process -Id $p.Id -Force }
+            $log = Join-Path $env:LOCALAPPDATA "$name\loi.log"
+            if (Test-Path $log) { Write-Host "   --- loi.log ---"; Get-Content $log -Tail 60; $ok = $false }
+            Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $since } -ErrorAction SilentlyContinue |
+              Where-Object { $_.ProviderName -in '.NET Runtime', 'Application Error', 'Windows Error Reporting' } |
+              Select-Object -First 4 | ForEach-Object { Write-Host "   --- $($_.ProviderName) ---"; Write-Host $_.Message }
+            if (-not $ok) { $failed += $name }
+          }
+          if ($failed.Count -gt 0) { throw "Ứng dụng không mở được: $($failed -join ', ')" }
+
       - name: Ký số các file .exe ứng dụng (khi có chứng thư số)
         if: env.CODESIGN_PFX_BASE64 != ''
         env:
