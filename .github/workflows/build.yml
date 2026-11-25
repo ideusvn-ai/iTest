@@ -95,7 +95,7 @@ jobs:
             Start-Sleep -Seconds 15
             $p.Refresh()
             $ok = (-not $p.HasExited) -and ($p.MainWindowHandle -ne 0)
-            Write-Host "== $name: đã thoát=$($p.HasExited) · cửa sổ=$($p.MainWindowHandle) · tiêu đề='$($p.MainWindowTitle)'"
+            Write-Host "== ${name}: đã thoát=$($p.HasExited) · cửa sổ=$($p.MainWindowHandle) · tiêu đề='$($p.MainWindowTitle)'"
             if ($p.HasExited) { Write-Host "   mã thoát: $($p.ExitCode)" } else { Stop-Process -Id $p.Id -Force }
             $log = Join-Path $env:LOCALAPPDATA "$name\loi.log"
             if (Test-Path $log) { Write-Host "   --- loi.log ---"; Get-Content $log -Tail 60; $ok = $false }
