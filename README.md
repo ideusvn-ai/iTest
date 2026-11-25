@@ -16,8 +16,8 @@ Bộ ba ứng dụng Windows chạy trong mạng LAN, không cần Internet:
 3. Số phiên bản khai báo ở **một nơi duy nhất**: thẻ `<Version>` trong `Directory.Build.props`. Để phát hành bản chính thức,
    sửa số đó (nếu cần) rồi tạo tag **trùng số phiên bản** và đẩy lên (tag khác số phiên bản sẽ bị workflow từ chối):
    ```
-   git tag v1.1.0
-   git push origin v1.1.0
+   git tag v1.1.1
+   git push origin v1.1.1
    ```
    Workflow sẽ tạo **Release** đính kèm 3 file Setup. Đường dẫn tải cố định dạng
    `https://github.com/<tài-khoản>/<repo>/releases/latest/download/iTest-Setup.exe`.
