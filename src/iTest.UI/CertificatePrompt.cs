@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using ITest.Core;
 using Microsoft.Win32;
