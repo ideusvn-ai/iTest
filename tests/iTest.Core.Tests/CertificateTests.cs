@@ -44,9 +44,11 @@ public class CertificateTests
         WithKey(key, () =>
         {
             var text = Issue(key, null);
-            // Sửa tên trường trong nội dung nhưng giữ chữ ký cũ.
+            // Chèn tên trường khác vào nội dung nhưng giữ chữ ký cũ.
             var o = JsonNode.Parse(text)!.AsObject();
-            var data = Encoding.UTF8.GetString(Convert.FromBase64String(o.Str("data"))).Replace("Trường THPT Thử", "Trường THPT Khác");
+            var original = Encoding.UTF8.GetString(Convert.FromBase64String(o.Str("data")));
+            var data = original.Replace("\"school\":", "\"school\":\"Truong Khac\",\"x\":");
+            Assert.NotEqual(original, data);
             o["data"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(data));
             Assert.Contains("chữ ký", Assert.Throws<InvalidDataException>(() => CertificateStore.Parse(o.ToJsonString())).Message);
             // Chứng chỉ do khoá khác ký.
