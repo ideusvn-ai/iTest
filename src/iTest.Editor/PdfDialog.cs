@@ -30,15 +30,19 @@ public sealed class PdfDialog : Window
             _school.Text = lines.ElementAtOrDefault(1) ?? exam.Unit;
         }
         catch { _school.Text = exam.Unit; }
-        VietInput.Attach(_dep); VietInput.Attach(_school);
+        // Tên Sở và tên trường lấy từ chứng chỉ sử dụng, không nhập tay.
+        var cert = CertificateStore.Installed(out _);
+        if (cert != null) { _dep.Text = cert.Department; _school.Text = cert.School; }
+        _dep.IsReadOnly = _school.IsReadOnly = true;
+        _dep.Focusable = _school.Focusable = false;
 
         var muted = (Brush)Application.Current.FindResource("Muted");
         var root = new StackPanel { Margin = new Thickness(24) };
         root.Children.Add(new TextBlock { Text = "Xuất đề thi PDF", FontSize = 20, FontWeight = FontWeights.Bold });
         root.Children.Add(new TextBlock { Text = $"{exam.Subject} · {exam.ExamName} · {exam.Questions.Count} câu · {exam.Minutes} phút", Foreground = muted, Margin = new Thickness(0, 4, 0, 14) });
-        root.Children.Add(Label("Sở / Phòng Giáo dục (dòng trên cùng bên trái, có thể để trống)"));
+        root.Children.Add(Label("Sở / Phòng Giáo dục (theo chứng chỉ sử dụng)"));
         root.Children.Add(_dep);
-        root.Children.Add(Label("Trường"));
+        root.Children.Add(Label("Trường (theo chứng chỉ sử dụng)"));
         root.Children.Add(_school);
         root.Children.Add(new TextBlock
         {

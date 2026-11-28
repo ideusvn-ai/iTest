@@ -1,0 +1,6 @@
+# Trang web iTest – chặn truy cập trực tiếp vào mã nguồn nội bộ, khoá ký và file cài đặt.
+Options -Indexes
+<FilesMatch "^(config(\.sample)?\.php|schema\.sql|HUONG-DAN\.md)$">
+    Require all denied
+</FilesMatch>
+RedirectMatch 404 ^/?(.*/)?(lib|storage|tools|tests)(/|$)

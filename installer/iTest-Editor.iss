@@ -2,6 +2,8 @@
 #define AppName "iTest-Editor"
 #define AppExe "iTest-Editor.exe"
 #define AppDir "iTest-Editor"
+; Bộ cài này có trang chọn chứng chỉ sử dụng (.itcert)
+#define NeedCertificate
 
 [Setup]
 AppId={{6B1C2F0E-7A41-4C52-9C3B-1E5D8A7F1103}

@@ -69,7 +69,7 @@
                                 <StackPanel Margin="0,0,6,0"><TextBlock Text="Kỳ thi *" Style="{StaticResource FieldLabel}"/><TextBox x:Name="FExam"/></StackPanel>
                                 <StackPanel Margin="6,0,0,0"><TextBlock Text="Môn thi *" Style="{StaticResource FieldLabel}"/><TextBox x:Name="FSubject"/></StackPanel>
                                 <StackPanel Margin="0,0,6,0"><TextBlock Text="Người soạn đề *" Style="{StaticResource FieldLabel}"/><TextBox x:Name="FAuthor"/></StackPanel>
-                                <StackPanel Margin="6,0,0,0"><TextBlock Text="Tổ chuyên môn / Đơn vị" Style="{StaticResource FieldLabel}"/><TextBox x:Name="FUnit"/></StackPanel>
+                                <StackPanel Margin="6,0,0,0"><TextBlock Text="Tổ chuyên môn" Style="{StaticResource FieldLabel}"/><TextBox x:Name="FUnit"/></StackPanel>
                                 <StackPanel Margin="0,0,6,0"><TextBlock Text="Năm học *" Style="{StaticResource FieldLabel}"/><TextBox x:Name="FYear" Text="2026 – 2027"/></StackPanel>
                                 <StackPanel Margin="6,0,0,0"><TextBlock Text="Sử dụng tài liệu" Style="{StaticResource FieldLabel}"/>
                                     <ComboBox x:Name="FDocs" SelectedIndex="0"><ComboBoxItem Content="Không được sử dụng tài liệu"/><ComboBoxItem Content="Được sử dụng tài liệu"/></ComboBox></StackPanel>

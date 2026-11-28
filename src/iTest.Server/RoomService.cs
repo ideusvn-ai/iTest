@@ -84,6 +84,8 @@ public sealed class RoomService : IDisposable
     public bool Paused { get; private set; }
     public int SecondsLeft { get; private set; }
     public int SubmitWindowMinutes { get; set; } = 15;
+    /// <summary>Nguyên văn chứng chỉ sử dụng của trường: gửi cho máy thí sinh để máy đó tự kiểm tra chữ ký trước khi vào phòng.</summary>
+    public string CertificateText { get; set; } = "";
     private bool _showScore;
     /// <summary>Cho thí sinh xem điểm trắc nghiệm sau khi nộp. Đổi lựa chọn thì gửi lại kết quả cho các máy đã nộp.</summary>
     public bool ShowScore
@@ -209,7 +211,7 @@ public sealed class RoomService : IDisposable
                 _pending.Add(conn);
             });
             conn.Start();
-            conn.Send(Msg.Welcome, new { room = Room, proctor = Proctor, exam = $"{Exam.ExamName} – {Exam.Subject}", department = Department, school = School });
+            conn.Send(Msg.Welcome, new { room = Room, proctor = Proctor, exam = $"{Exam.ExamName} – {Exam.Subject}", department = Department, school = School, cert = CertificateText });
         }
     }
 
@@ -250,7 +252,7 @@ public sealed class RoomService : IDisposable
                 conn.Send(Msg.Pong);
                 return;
             case Msg.Hello:
-                conn.Send(Msg.Welcome, new { room = Room, proctor = Proctor, exam = $"{Exam.ExamName} – {Exam.Subject}" });
+                conn.Send(Msg.Welcome, new { room = Room, proctor = Proctor, exam = $"{Exam.ExamName} – {Exam.Subject}", department = Department, school = School, cert = CertificateText });
                 _helloMachine[conn] = Clip(m.Str("machine"), 60);
                 _helloToken[conn] = Clip(m.Str("token"), 64);
                 break;

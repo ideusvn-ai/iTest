@@ -16,13 +16,12 @@ Bộ ba ứng dụng Windows chạy trong mạng LAN, không cần Internet:
 3. Số phiên bản khai báo ở **một nơi duy nhất**: thẻ `<Version>` trong `Directory.Build.props`. Để phát hành bản chính thức,
    sửa số đó (nếu cần) rồi tạo tag **trùng số phiên bản** và đẩy lên (tag khác số phiên bản sẽ bị workflow từ chối):
    ```
-   git tag v1.1.1
-   git push origin v1.1.1
+   git tag v1.2.0
+   git push origin v1.2.0
    ```
    Workflow sẽ tạo **Release** đính kèm 3 file Setup. Đường dẫn tải cố định dạng
    `https://github.com/<tài-khoản>/<repo>/releases/latest/download/iTest-Setup.exe`.
-4. **Trang web giới thiệu & tải xuống** (`website/index.html`) được tự đăng lên GitHub Pages.
-   Lần đầu cần bật: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+4. **Trang web giới thiệu, đăng ký và tải xuống** nằm ở thư mục `web/` (PHP + MySQL), đặt trên máy chủ web của bạn — xem `web/HUONG-DAN.md`.
    Các nút tải trên trang tự trỏ về Release của repo.
 
 ## Tự build trên máy Windows
@@ -163,6 +162,17 @@ GitHub Actions chạy cả hai bộ trước mỗi lần build; lỗi kiểm th�
 - **Bộ gõ tiếng Việt** có sẵn (TELEX/VNI) có thể **tắt** — trong Editor ở góc trên phải, trên máy thí sinh ở nút ⚙ — khi soạn/làm bài tiếng Anh
   hoặc khi máy đã bật Unikey. Trong công thức `$...$` bộ gõ tự không bỏ dấu.
 
+## Chứng chỉ sử dụng
+- iTest chỉ cấp cho trường học. Trường đăng ký tài khoản trên trang web; email trả về gồm **link tải có hiệu lực 24 giờ** và **file chứng chỉ `.itcert`**
+  ghi tên Sở, tên trường, người đăng ký và hạn dùng, có chữ ký số RSA-SHA256.
+- **iTest-Server và iTest-Editor không còn ô nhập tên Sở và tên trường**: hai thông tin này lấy từ chứng chỉ. Bộ cài của hai ứng dụng yêu cầu chọn
+  file chứng chỉ; trong iTest-Server có nút *Đổi chứng chỉ…*. Không có chứng chỉ còn hạn thì không mở được phòng thi, không đóng gói hay xuất đề được.
+- **iTest (máy thí sinh) không cần chứng chỉ**, nhưng khi vào phòng nó tự kiểm tra chứng chỉ của máy giám thị và từ chối nếu chứng chỉ không hợp lệ.
+- Ứng dụng chỉ chứa **khoá công khai** (trong `src/iTest.Core/Certificate.cs`). **Khoá bí mật** dùng để ký nằm trên máy chủ trang web
+  (`web/storage/keys/`), không bao giờ đưa vào repo. Đổi khoá: `php web/tools/keygen.php --force`, dán khoá công khai mới vào `Certificate.cs`, build lại.
+- Cài im lặng hàng loạt: `iTest-Server-Setup.exe /VERYSILENT /CERT="D:\ChungChi.itcert"`.
+- Giới hạn: phần mềm chạy không cần Internet nên không thu hồi được chứng chỉ từ xa; chứng chỉ tự hết hiệu lực theo hạn dùng (mặc định 365 ngày).
+
 ## Soạn và nhập câu hỏi
 - **Thêm / xoá / đổi thứ tự từng câu**: dùng các nút *＋ Thêm*, *Xoá*, *▲*, *▼* dưới danh sách câu hỏi trong Editor. Câu chỉ di chuyển trong phần của nó
   (trắc nghiệm hoặc tự luận); khi thêm hoặc xoá câu, điểm của phần đó được chia đều lại theo tổng điểm phần.
@@ -189,5 +199,5 @@ src/iTest.Editor   Soạn đề, bản nháp tự lưu (Drafts.cs), nhập Word/
 tests/             Kiểm thử tự động phần lõi (xUnit)
 tools/             iTest-LoadTest: giả lập nhiều máy thí sinh
 installer/         Script Inno Setup cho 3 bộ cài, script ký số (sign.ps1, new-selfsigned-cert.ps1)
-website/           Trang giới thiệu & tải xuống
+web/               Trang web PHP + MySQLi: giới thiệu, đăng ký, tài khoản, cấp chứng chỉ, link tải 24 giờ
 ```

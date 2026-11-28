@@ -54,6 +54,30 @@ public partial class MainWindow : Window
         // Mở lại phiên trước rồi mới dọn bản nháp rác, để bản nháp đang soạn dở (kể cả còn trống) không bị xoá nhầm.
         RestoreSession();
         RefreshDrafts();
+        // iTest-Editor chỉ dùng được khi máy có chứng chỉ sử dụng của trường (còn hạn). Tên Sở và tên trường trên đề in lấy từ chứng chỉ.
+        _cert = CertificateStore.Installed(out var certProblem);
+        ShowCertificateInTitle();
+        ContentRendered += (_, _) =>
+        {
+            if (_cert != null || _certAsked) return;
+            _certAsked = true;
+            _cert = CertificatePrompt.Ask(this, certProblem + " iTest-Editor cần chứng chỉ sử dụng của trường.");
+            if (_cert == null) { Close(); return; }
+            ShowCertificateInTitle();
+        };
+    }
+
+    private Certificate? _cert;
+    private bool _certAsked;
+    private void ShowCertificateInTitle() => Title = _cert == null ? "iTest-Editor" : $"iTest-Editor · {_cert.School}";
+
+    /// <summary>Chứng chỉ có thể hết hạn trong lúc ứng dụng đang mở: kiểm tra lại trước các việc xuất bản (đóng gói, xuất PDF).</summary>
+    private bool EnsureCertificate()
+    {
+        if (_cert != null && !_cert.Expired) return true;
+        _cert = CertificateStore.Installed(out var problem) ?? CertificatePrompt.Ask(this, problem + " iTest-Editor cần chứng chỉ sử dụng của trường.");
+        ShowCertificateInTitle();
+        return _cert != null;
     }
 
     // ===================== Bộ gõ tiếng Việt =====================
@@ -987,7 +1011,7 @@ public partial class MainWindow : Window
 
     private async void ExportPdf_Click(object sender, RoutedEventArgs e)
     {
-        if (_draft == null) return;
+        if (_draft == null || !EnsureCertificate()) return;
         SaveNow();
         var x = _draft.Exam;
         var opt = new PdfDialog(x) { Owner = this };
@@ -1021,7 +1045,7 @@ public partial class MainWindow : Window
 
     private async void Pack_Click(object sender, RoutedEventArgs e)
     {
-        if (_draft == null) return;
+        if (_draft == null || !EnsureCertificate()) return;
         var x = _draft.Exam;
         string Ascii(string s) => new string(s.Normalize(System.Text.NormalizationForm.FormD)
             .Where(ch => CharUnicodeInfo.GetUnicodeCategory(ch) != UnicodeCategory.NonSpacingMark).ToArray())

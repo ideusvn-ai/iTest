@@ -8,6 +8,8 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        // Bộ cài đặt gọi "--check-cert <file>" để kiểm tra chứng chỉ người dùng chọn: mã thoát 0 = dùng được, 2 = không hợp lệ, 3 = hết hạn.
+        if (e.Args.Length >= 2 && e.Args[0] == "--check-cert") { Environment.Exit(ITest.Core.CertificateStore.Check(e.Args[1])); return; }
         // Lỗi bất ngờ không được làm sập máy chủ giữa buổi thi: ghi nhật ký và chạy tiếp.
         ITest.UI.CrashGuard.Install(this, "iTest-Server", notify: true);
         // Mỗi máy chỉ chạy một iTest-Server.

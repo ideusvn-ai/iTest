@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Media;
 using ITest.Core;
 using ITest.UI;
 using Microsoft.Win32;
@@ -31,6 +32,15 @@ public partial class MainWindow : Window
         InitializeComponent();
         HostLine.Text = $"Máy {Environment.MachineName} · {NetUtil.LocalIPv4()} · Workgroup {NetUtil.GetWorkgroup()}";
         LoadSettings();
+        var certProblem = LoadCertificate();
+        // Chưa có chứng chỉ (hoặc đã hết hạn): hỏi ngay khi cửa sổ hiện xong. Bỏ qua thì vẫn xem được ứng dụng nhưng không mở được phòng thi.
+        ContentRendered += (_, _) =>
+        {
+            if (_cert != null || _certAsked) return;
+            _certAsked = true;
+            var c = CertificatePrompt.Ask(this, certProblem + " iTest-Server cần chứng chỉ sử dụng của trường để mở phòng thi.");
+            if (c != null) { _cert = c; ShowCertificate(""); }
+        };
         foreach (var f in Filters) FilterBox.Items.Add(new ComboBoxItem { Content = f.label, Tag = f.key });
         FilterBox.SelectedIndex = 0;
         Closing += OnClosing;
@@ -180,7 +190,12 @@ public partial class MainWindow : Window
         catch (CryptographicException) { MessageBox.Show(this, "Sai mật khẩu bộ đề.", "Khôi phục", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
         catch (Exception ex) { MessageBox.Show(this, "Không mở được bộ đề: " + ex.Message, "Khôi phục", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
 
-        _room = new RoomService(Dispatcher);
+        if (_cert == null)
+        {
+            var problem = LoadCertificate();
+            if (_cert == null) { MessageBox.Show(this, problem + "\n\nBấm “Đổi chứng chỉ…” để chọn file chứng chỉ rồi khôi phục lại.", "Khôi phục", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+        }
+        _room = new RoomService(Dispatcher) { CertificateText = _cert.Raw };
         _room.LoadPackage(pkg, st.PackagePath);
         try { _room.Restore(st); }
         catch (InvalidDataException ex) { MessageBox.Show(this, ex.Message, "Khôi phục", MessageBoxButton.OK, MessageBoxImage.Warning); _room.Dispose(); _room = null; return; }
@@ -201,13 +216,50 @@ public partial class MainWindow : Window
             if (File.Exists(_settingsPath))
             {
                 var s = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(_settingsPath)) ?? new();
-                DeptBox.Text = s.GetValueOrDefault("dept", "");
-                SchoolBox.Text = s.GetValueOrDefault("school", "");
                 RoomBox.Text = s.GetValueOrDefault("room", "");
                 ProctorBox.Text = s.GetValueOrDefault("proctor", "");
             }
         }
         catch { }
+    }
+
+    // ================== Chứng chỉ sử dụng ==================
+    private Certificate? _cert;
+    private bool _certAsked;
+
+    /// <summary>Đọc chứng chỉ đã cài trên máy và hiện tên Sở, tên trường. Chưa có hoặc hết hạn thì hiện lý do.</summary>
+    private string LoadCertificate()
+    {
+        _cert = CertificateStore.Installed(out var problem);
+        ShowCertificate(problem);
+        return problem;
+    }
+
+    private void ShowCertificate(string problem)
+    {
+        if (_cert != null)
+        {
+            CertSchool.Text = _cert.School;
+            CertDept.Text = _cert.Department;
+            CertInfo.Text = $"Chứng chỉ số {_cert.Id} · {_cert.ExpiryText}";
+            CertSchool.Foreground = Brushes.Black;
+        }
+        else
+        {
+            CertSchool.Text = "Chưa có chứng chỉ sử dụng";
+            CertDept.Text = problem;
+            CertInfo.Text = "Bấm “Đổi chứng chỉ…” để chọn file .itcert nhận qua email khi đăng ký trên trang web iTest.";
+            CertSchool.Foreground = new SolidColorBrush(Color.FromRgb(0xB9, 0x1C, 0x1C));
+        }
+    }
+
+    private void ChangeCert_Click(object sender, RoutedEventArgs e)
+    {
+        var c = CertificatePrompt.Ask(this, _cert == null ? "iTest-Server cần chứng chỉ sử dụng của trường để mở phòng thi." : $"Đang dùng chứng chỉ của {_cert.School}.");
+        if (c == null) return;
+        _cert = c;
+        ShowCertificate("");
+        SetupError.Text = "";
     }
 
     private void SaveSettings()
@@ -216,7 +268,7 @@ public partial class MainWindow : Window
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
             File.WriteAllText(_settingsPath, JsonSerializer.Serialize(new Dictionary<string, string>
-            { ["dept"] = DeptBox.Text, ["school"] = SchoolBox.Text, ["room"] = RoomBox.Text, ["proctor"] = ProctorBox.Text }));
+            { ["room"] = RoomBox.Text, ["proctor"] = ProctorBox.Text }));
         }
         catch { }
     }
@@ -286,8 +338,12 @@ public partial class MainWindow : Window
     private void OpenRoom_Click(object sender, RoutedEventArgs e)
     {
         var miss = new List<string>();
-        if (string.IsNullOrWhiteSpace(DeptBox.Text)) miss.Add("Sở GD&ĐT");
-        if (string.IsNullOrWhiteSpace(SchoolBox.Text)) miss.Add("trường");
+        // Tên Sở và tên trường lấy từ chứng chỉ; không có chứng chỉ còn hạn thì không mở được phòng thi.
+        if (_cert == null || _cert.Expired)
+        {
+            var problem = LoadCertificate();
+            if (_cert == null) { SetupError.Text = problem + " Bấm “Đổi chứng chỉ…” để chọn file chứng chỉ."; return; }
+        }
         if (string.IsNullOrWhiteSpace(RoomBox.Text)) miss.Add("phòng thi");
         if (string.IsNullOrWhiteSpace(ProctorBox.Text)) miss.Add("giám thị");
         if (_pkgPath == null) miss.Add("bộ đề");
@@ -296,7 +352,7 @@ public partial class MainWindow : Window
         SaveSettings();
         _room = new RoomService(Dispatcher)
         {
-            Department = DeptBox.Text.Trim(), School = SchoolBox.Text.Trim(), Room = RoomBox.Text.Trim(), Proctor = ProctorBox.Text.Trim()
+            Department = _cert.Department, School = _cert.School, CertificateText = _cert.Raw, Room = RoomBox.Text.Trim(), Proctor = ProctorBox.Text.Trim()
         };
         _room.LoadPackage(_pkg, _pkgPath!);
         _room.SubmitWindowMinutes = SelectedWindow();

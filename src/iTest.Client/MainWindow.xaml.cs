@@ -31,6 +31,8 @@ public partial class MainWindow : Window
     private bool _examRunning;
     private bool _submitted;
     private bool _confirmed;           // máy chủ đã xác nhận lưu bài (tin Result)
+    private string _school = "";       // tên trường theo chứng chỉ của máy chủ (đã kiểm tra chữ ký)
+    private string? _certRefused;      // lý do từ chối vào phòng vì chứng chỉ của máy chủ không hợp lệ
     private bool _autoSubmit;          // lần nộp gần nhất là tự động (hết giờ / bị thu bài)
     private bool _resumePending;       // mở lại ứng dụng khi bài đã nộp nhưng chưa được máy chủ xác nhận
     private SavedSession? _saved;      // phiên làm bài còn dở đọc được lúc mở ứng dụng
@@ -367,7 +369,21 @@ public partial class MainWindow : Window
         switch (m.Str("t"))
         {
             case Msg.Welcome:
-                RoomLine.Text = $"{m.Str("room")} · {m.Str("exam")} · Giám thị: {m.Str("proctor")}";
+                if (_awaitingWelcome)
+                {
+                    // Trước khi vào phòng: máy thí sinh tự kiểm tra chứng chỉ sử dụng của máy chủ (chữ ký số và hạn dùng).
+                    // Máy chủ không có chứng chỉ hợp lệ thì không vào phòng — tên trường hiển thị luôn là tên trong chứng chỉ.
+                    try { _school = CertificateStore.Usable(CertificateStore.Parse(m.Str("cert"))).School; }
+                    catch (Exception ex)
+                    {
+                        _awaitingWelcome = false;
+                        _certRefused = "Máy chủ phòng thi này không có chứng chỉ sử dụng iTest hợp lệ. Hãy báo giám thị. ("
+                                     + (ex is InvalidDataException ? ex.Message : "không đọc được chứng chỉ") + ")";
+                        _conn?.Close();
+                        break;
+                    }
+                }
+                RoomLine.Text = (_school.Length > 0 ? _school + " · " : "") + $"{m.Str("room")} · {m.Str("exam")} · Giám thị: {m.Str("proctor")}";
                 if (_awaitingWelcome)
                 {
                     _awaitingWelcome = false;
@@ -509,9 +525,10 @@ public partial class MainWindow : Window
             InfoPanel.Visibility = Visibility.Collapsed;
             if (FindPanel.Visibility != Visibility.Visible) Anim.Show(FindPanel);
             ScanText.Text = $"Tìm thấy {_rooms.Count} phòng thi trong mạng LAN";
-            FindError.Text = wrongPin
+            FindError.Text = _certRefused ?? (wrongPin
                 ? "Không vào được phòng. Kiểm tra lại mã phòng thi (do giám thị đọc) rồi thử lại."
-                : "Mất kết nối với máy chủ. Hãy chọn phòng và vào lại.";
+                : "Mất kết nối với máy chủ. Hãy chọn phòng và vào lại.");
+            _certRefused = null;
             return;
         }
         // Đã vào phòng (đang chờ, đang làm bài hoặc đã nộp): tự kết nối lại cho tới khi giám thị kết thúc phiên.

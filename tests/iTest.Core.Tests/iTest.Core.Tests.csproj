@@ -23,4 +23,9 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Chứng chỉ thử ĐÃ HẾT HẠN, do trang web (PHP) ký bằng khoá thật: kiểm tra chữ ký PHP ↔ .NET mà không tạo ra giấy phép dùng được. -->
+    <None Include="het-han.itcert" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -2,6 +2,8 @@
 #define AppName "iTest-Server"
 #define AppExe "iTest-Server.exe"
 #define AppDir "iTest-Server"
+; Bộ cài này có trang chọn chứng chỉ sử dụng (.itcert)
+#define NeedCertificate
 
 [Setup]
 AppId={{6B1C2F0E-7A41-4C52-9C3B-1E5D8A7F1102}

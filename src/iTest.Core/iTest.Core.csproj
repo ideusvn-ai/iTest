@@ -9,4 +9,10 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Bộ kiểm thử được thay khoá công khai kiểm tra chứng chỉ bằng khoá thử. -->
+    <InternalsVisibleTo Include="iTest.Core.Tests" />
+    <InternalsVisibleTo Include="iTest.Windows.Tests" />
+  </ItemGroup>
+
 </Project>

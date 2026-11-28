@@ -152,6 +152,15 @@ jobs:
           $lt.Refresh()
           if ($lt.HasExited -and $lt.ExitCode -eq -532462766) { $failed += 'iTest-LoadTest' } elseif (-not $lt.HasExited) { Stop-Process -Id $lt.Id -Force }
           Write-Host "== iTest-LoadTest: đã thoát=$($lt.HasExited)"
+          # Bộ cài gọi "--check-cert" để kiểm tra chứng chỉ: file thử đã hết hạn (ký bằng khoá thật) phải cho mã 3, file rác cho mã 2.
+          Set-Content "$env:RUNNER_TEMP\rac.itcert" '{"format":"iTest-Certificate-1","data":"e30=","sig":"AAAA"}'
+          foreach ($app in 'iTest-Server', 'iTest-Editor') {
+            $exe = $apps[$app][1]
+            $a = (Start-Process -FilePath $exe -ArgumentList '--check-cert', 'tests\iTest.Core.Tests\het-han.itcert' -PassThru -Wait).ExitCode
+            $b = (Start-Process -FilePath $exe -ArgumentList '--check-cert', "$env:RUNNER_TEMP\rac.itcert" -PassThru -Wait).ExitCode
+            Write-Host "== $app --check-cert: hết hạn=$a (cần 3) · file rác=$b (cần 2)"
+            if ($a -ne 3 -or $b -ne 2) { $failed += "$app --check-cert" }
+          }
           if ($failed.Count -gt 0) { throw "Ứng dụng không mở được sau khi cài: $($failed -join ', ')" }
 
       - name: Ký số các bộ cài (khi có chứng thư số)
@@ -184,24 +193,15 @@ jobs:
             dist/iTest-LoadTest.zip
           generate_release_notes: true
 
-  website:
-    # Cần bật một lần: Settings → Pages → Source: GitHub Actions.
-    # Nếu chưa bật, bước này chỉ báo cảnh báo và không làm hỏng lần build.
-    # Chỉ đăng web từ nhánh main: môi trường github-pages chặn đăng từ tag.
-    if: github.ref == 'refs/heads/main'
-    needs: build
-    continue-on-error: true
+  web:
+    # Trang web PHP (thư mục web/): kiểm tra cú pháp và chạy thử toàn bộ luồng đăng ký → email → chứng chỉ → link tải.
+    # Trang web được đặt trên máy chủ PHP + MySQL của bạn (xem web/HUONG-DAN.md), không đăng lên GitHub Pages.
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Gắn đường dẫn tải xuống của repo này
-        run: sed -i "s#__REPO__#${{ github.repository }}#g" website/index.html
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
-        with:
-          path: website
-      - id: deploy
-        uses: actions/deploy-pages@v5
+      - name: Kiểm tra cú pháp PHP
+        run: |
+          php -v | head -1
+          find web -name '*.php' -print0 | xargs -0 -n1 php -l > /dev/null
+      - name: Chạy thử các luồng của trang web
+        run: bash web/tests/run.sh

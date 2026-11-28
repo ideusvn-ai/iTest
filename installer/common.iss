@@ -86,3 +86,84 @@ begin
     end;
   end;
 end;
+
+#ifdef NeedCertificate
+// ---------------- Chứng chỉ sử dụng ----------------
+// iTest-Server và iTest-Editor lấy tên Sở, tên trường từ chứng chỉ (.itcert) do trang web iTest cấp cho trường.
+// Bộ cài yêu cầu chọn file chứng chỉ; sau khi chép xong ứng dụng, chính ứng dụng kiểm tra chữ ký số và hạn dùng của file.
+// Cài im lặng: truyền /CERT="đường dẫn file" (không truyền thì ứng dụng sẽ hỏi chứng chỉ khi mở lần đầu).
+var
+  CertPage: TInputFileWizardPage;
+  CertPath: String;
+
+function InstalledCertPath(): String;
+begin
+  Result := ExpandConstant('{commonappdata}\iTest\chung-chi.itcert');
+end;
+
+function LooksLikeCertificate(const FileName: String): Boolean;
+var
+  S: AnsiString;
+begin
+  Result := LoadStringFromFile(FileName, S) and (Length(S) < 20000) and (Pos('iTest-Certificate-1', String(S)) > 0);
+end;
+
+procedure InitializeWizard();
+begin
+  CertPage := CreateInputFilePage(wpSelectDir, 'Chứng chỉ sử dụng', 'Chọn file chứng chỉ (.itcert) của trường',
+    'Tên Sở và tên trường trong phần mềm được lấy từ chứng chỉ sử dụng. File chứng chỉ được gửi qua email khi trường đăng ký tài khoản trên trang web iTest, và có thể lấy lại trong mục Tài khoản của trang web.');
+  CertPage.Add('File chứng chỉ:', 'Chứng chỉ iTest (*.itcert)|*.itcert|Tất cả các file|*.*', '.itcert');
+  CertPath := ExpandConstant('{param:CERT|}');
+  CertPage.Values[0] := CertPath;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = CertPage.ID) and WizardSilent();
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID <> CertPage.ID) or WizardSilent() then Exit;
+  CertPath := Trim(CertPage.Values[0]);
+  if CertPath = '' then
+  begin
+    if FileExists(InstalledCertPath()) then
+      Result := MsgBox('Máy này đã có chứng chỉ từ lần cài trước. Dùng tiếp chứng chỉ đó?', mbConfirmation, MB_YESNO) = IDYES
+    else
+    begin
+      MsgBox('Vui lòng chọn file chứng chỉ (.itcert) của trường.', mbError, MB_OK);
+      Result := False;
+    end;
+  end
+  else if (not FileExists(CertPath)) or (not LooksLikeCertificate(CertPath)) then
+  begin
+    MsgBox('File đã chọn không phải chứng chỉ iTest. Hãy chọn file .itcert nhận được qua email.', mbError, MB_OK);
+    Result := False;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Code: Integer;
+begin
+  if (CurStep <> ssPostInstall) or (CertPath = '') or (not FileExists(CertPath)) then Exit;
+  Code := -1;
+  if Exec(ExpandConstant('{app}\{#AppExe}'), '--check-cert "' + CertPath + '"', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0) then
+  begin
+    ForceDirectories(ExtractFileDir(InstalledCertPath()));
+    FileCopy(CertPath, InstalledCertPath(), False);
+    Log('Da cai chung chi: ' + CertPath);
+  end
+  else
+  begin
+    Log('Chung chi khong dung duoc, ma: ' + IntToStr(Code));
+    if Code = 3 then
+      SuppressibleMsgBox('Chứng chỉ đã chọn đã hết hạn. Đăng nhập trang web iTest để lấy lại chứng chỉ mới; ứng dụng sẽ hỏi chứng chỉ khi mở.', mbError, MB_OK, IDOK)
+    else
+      SuppressibleMsgBox('Chứng chỉ đã chọn không dùng được (file đã bị sửa hoặc không do iTest cấp). Ứng dụng sẽ hỏi lại chứng chỉ khi mở.', mbError, MB_OK, IDOK);
+  end;
+end;
+#endif
+

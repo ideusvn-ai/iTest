@@ -9,3 +9,13 @@ dist/
 # Chứng thư ký số
 *.pfx
 *.pfx.base64.txt
+
+# Khoá bí mật ký chứng chỉ và chứng chỉ thật: không bao giờ đưa vào repo
+*private*.pem
+*.itcert
+!tests/**/het-han.itcert
+web/config.php
+web/storage/downloads/*
+!web/storage/downloads/.gitkeep
+web/storage/keys/*
+!web/storage/keys/.gitkeep
